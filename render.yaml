@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: cloud-runner-api
+    runtime: node
+    plan: free
+    buildCommand: npm install || true
+    startCommand: node -e "require('http').createServer((req, res) => res.end('Cloud Runner 24/7 Online')).listen(process.env.PORT || 3000)"
+    envVars:
+      - key: NODE_ENV
+        value: production
