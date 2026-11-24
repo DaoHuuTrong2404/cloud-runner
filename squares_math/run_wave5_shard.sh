@@ -67,6 +67,14 @@ case "$SHARD" in
       --shard "$SUB" --num-shards 4 --procs 4 --rounds 3 \
       --out-npz "${OUT}/w5_fdp_s${SUB}.npz"
     ;;
+  20|21|22|23)
+    SUB=$((SHARD - 20))
+    python3 -u squares_math/workers/w5b_2d_faultdp_gadgetq.py \
+      --union-npz "$DS/nov24_union.npz" \
+      --lags-json "$DS/lag_targets.json" \
+      --shard "$SUB" --num-shards 4 --quench-gadgets 280 --procs 4 \
+      --out-npz "${OUT}/w5b_2dfdp_s${SUB}.npz"
+    ;;
   *)
     echo "Unknown shard $SHARD"
     exit 1
