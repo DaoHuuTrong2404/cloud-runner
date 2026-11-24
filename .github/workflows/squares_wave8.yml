@@ -1,0 +1,185 @@
+name: Squares Math Wave 8 Mega-Pool (WideReach M23-31 + Round2 + GrowV2 -> 3-Wave Pooled 4D-DP)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        description: "Run identifier for artifacts"
+        required: true
+        default: "w8a"
+        type: string
+      w6_run_id:
+        description: "Wave 6 run ID for 4,952 shrunk M<=22 gadgets"
+        required: false
+        default: "45432243265"
+        type: string
+      w7_run_id:
+        description: "Wave 7 run ID for grow+deepq+pair gadgets"
+        required: false
+        default: "45445028521"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  wave8a_factory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download Wave 6A gadget banks
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w6_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w6a-w6a-*
+          path: pooled_prev/w6a
+
+      - name: Download Wave 7A gadget banks
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w7_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w7a-w7a-*
+          path: pooled_prev/w7a
+
+      - name: Run Wave 8A Mega-Pool Factory Shard
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          mkdir -p "artifacts/w8a_${SHARD_ID}" /tmp/sq_w8_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v3.npz" /tmp/sq_w8_ds/pub_base_v3.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w8_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w8_ds/
+          export SQ_DS_DIR="/tmp/sq_w8_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          if [ "$SHARD_ID" -le 9 ]; then
+            python3 -u squares_math/workers/w8a_megapool_factory.py \
+              --union-npz /tmp/sq_w8_ds/pub_base_v3.npz \
+              --prev-glob "pooled_prev/w6a/**/gadgets_s*.npz" \
+              --prev-glob "pooled_prev/w7a/**/g7_*.npz" \
+              --mode wide_reach --shard "$SHARD_ID" --num-shards 10 --per-shard 240 --procs 4 \
+              --out-npz "artifacts/w8a_${SHARD_ID}/g8_wide_s${SHARD_ID}.npz"
+          elif [ "$SHARD_ID" -le 15 ]; then
+            SUB=$((SHARD_ID - 10))
+            python3 -u squares_math/workers/w8a_megapool_factory.py \
+              --union-npz /tmp/sq_w8_ds/pub_base_v3.npz \
+              --prev-glob "pooled_prev/w6a/**/gadgets_s*.npz" \
+              --prev-glob "pooled_prev/w7a/**/g7_*.npz" \
+              --mode round2_requench --shard "$SUB" --num-shards 6 --per-shard 280 --procs 4 \
+              --out-npz "artifacts/w8a_${SHARD_ID}/g8_r2_s${SUB}.npz"
+          else
+            SUB=$((SHARD_ID - 16))
+            python3 -u squares_math/workers/w8a_megapool_factory.py \
+              --union-npz /tmp/sq_w8_ds/pub_base_v3.npz \
+              --prev-glob "pooled_prev/w6a/**/gadgets_s*.npz" \
+              --prev-glob "pooled_prev/w7a/**/g7_*.npz" \
+              --mode grow_v2 --shard "$SUB" --num-shards 4 --per-shard 260 --procs 4 \
+              --out-npz "artifacts/w8a_${SHARD_ID}/g8_grow2_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w8a_${SHARD_ID}"
+
+      - name: Upload Wave 8A Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w8a-${{ matrix.shard }}
+          path: artifacts/w8a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave8b_megapool_dp:
+    needs: wave8a_factory
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download Wave 6A gadget banks
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w6_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w6a-w6a-*
+          path: pooled_all/w6a
+
+      - name: Download Wave 7A gadget banks
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w7_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w7a-w7a-*
+          path: pooled_all/w7a
+
+      - name: Download Wave 8A gadget banks
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.run_tag }}-w8a-*
+          path: pooled_all/w8a
+
+      - name: Run Wave 8B 3-Wave Mega-Pool 4D-DP + Deep Seam-fq + Contact LP
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          mkdir -p "artifacts/w8b_${SHARD_ID}" /tmp/sq_w8_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v3.npz" /tmp/sq_w8_ds/pub_base_v3.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w8_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w8_ds/
+          export SQ_DS_DIR="/tmp/sq_w8_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w8_ds/pub_base_v3.npz \
+            --gadget-glob "pooled_all/w6a/**/gadgets_s*.npz" \
+            --gadget-glob "pooled_all/w7a/**/g7_*.npz" \
+            --gadget-glob "pooled_all/w8a/**/g8_*.npz" \
+            --lags-json /tmp/sq_w8_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w8b_${SHARD_ID}/w8b_megapool_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w8b_${SHARD_ID}"
+
+      - name: Upload Wave 8B Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w8b-${{ matrix.shard }}
+          path: artifacts/w8b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
