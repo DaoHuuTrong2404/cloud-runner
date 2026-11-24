@@ -1,0 +1,61 @@
+name: Squares Math Wave 5 Cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        description: "Run identifier for artifacts"
+        required: true
+        default: "w5a"
+        type: string
+      shards_json:
+        description: "JSON array of shard IDs (0..19)"
+        required: true
+        default: '["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]'
+        type: string
+      minutes_total:
+        description: "Target compute budget per shard in minutes"
+        required: false
+        default: "42"
+        type: string
+
+jobs:
+  compute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(inputs.shards_json) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Run Wave 5 shard
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+          MINUTES_TOTAL: ${{ inputs.minutes_total }}
+        run: |
+          mkdir -p "artifacts/shard_${SHARD_ID}"
+          sed -i 's/\r$//' squares_math/run_wave5_shard.sh
+          bash squares_math/run_wave5_shard.sh
+
+      - name: Upload shard results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-shard-${{ matrix.shard }}
+          path: artifacts/shard_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
