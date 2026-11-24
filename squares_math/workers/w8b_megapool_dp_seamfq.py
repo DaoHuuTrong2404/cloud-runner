@@ -411,10 +411,13 @@ def main():
                         f"  [W8B WIN] n={n:4d} {cur[n][0]:.7f} -> {Lf:.7f} (dL={dL:.7f}, dS={dL / math.sqrt(n):.8f})",
                         flush=True,
                     )
-            if time.time() - t0 > 4800:
+            if time.time() - t0 > 4500:
                 print(
-                    f"[W8B Shard {args.shard}] Time limit reached cleanly.", flush=True
+                    f"[W8B Shard {args.shard}] Time limit reached cleanly; cancelling remaining futures.",
+                    flush=True,
                 )
+                for f_rem in futs:
+                    f_rem.cancel()
                 break
 
     payload = {}
