@@ -1,0 +1,257 @@
+name: Squares Math Wave 12 Super-BFMelt-RoundPress (All 560 Non-Grid) -> 6-Wave Mega-Pool 4D-DP
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w12"
+        type: string
+      w6_run_id:
+        required: false
+        default: "45432243265"
+        type: string
+      w7_run_id:
+        required: false
+        default: "45445028521"
+        type: string
+      w8_run_id:
+        required: false
+        default: "45455826211"
+        type: string
+      w9_run_id:
+        required: false
+        default: "45474409055"
+        type: string
+      w10_run_id:
+        required: false
+        default: "45487524096"
+        type: string
+      w11_run_id:
+        required: false
+        default: "45495981866"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  wave12a_super_bfmelt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download Wave 6B..11 winning packings to build ~22.0892 frontier
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w6_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w6a-w6b-*
+          path: prev_wins/w6b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w7_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w7a-w7b-*
+          path: prev_wins/w7b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w8_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w8a-w8b-*
+          path: prev_wins/w8b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w9_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w9a-w9b-*
+          path: prev_wins/w9b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w10_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w10a-w10b-*
+          path: prev_wins/w10b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w11_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w11-s-*
+          path: prev_wins/w11
+
+      - name: Run Wave 12A Super-BFMelt-RoundPress Shard
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          mkdir -p "artifacts/w12a_${SHARD_ID}" /tmp/sq_w12_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v3.npz" /tmp/sq_w12_ds/pub_base_v3.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w12_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w12_ds/
+          export SQ_DS_DIR="/tmp/sq_w12_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          python3 -u squares_math/workers/w12a_super_bfmelt_rp.py \
+            --union-npz /tmp/sq_w12_ds/pub_base_v3.npz \
+            --win-glob "prev_wins/**/*.npz" \
+            --lags-json /tmp/sq_w12_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 3800 \
+            --out-npz "artifacts/w12a_${SHARD_ID}/w12a_bfmelt_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w12a_${SHARD_ID}"
+
+      - name: Upload Wave 12A Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w12a-${{ matrix.shard }}
+          path: artifacts/w12a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave12b_6wave_megapool_dp:
+    needs: wave12a_super_bfmelt
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download ALL 5 Gadget Waves + ALL 7 Winning Packing Waves (new donors!)
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w6_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w6a-w6a-*
+          path: pooled_all/w6a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w7_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w7a-w7a-*
+          path: pooled_all/w7a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w8_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w8a-w8a-*
+          path: pooled_all/w8a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w9_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w9a-w9a-*
+          path: pooled_all/w9a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w10_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w10a-w10a-*
+          path: pooled_all/w10a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w6_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w6a-w6b-*
+          path: prev_wins/w6b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w7_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w7a-w7b-*
+          path: prev_wins/w7b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w8_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w8a-w8b-*
+          path: prev_wins/w8b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w9_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w9a-w9b-*
+          path: prev_wins/w9b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w10_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w10a-w10b-*
+          path: prev_wins/w10b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w11_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w11-s-*
+          path: prev_wins/w11
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.run_tag }}-w12a-*
+          path: prev_wins/w12a
+
+      - name: Run Wave 12B Full-Frontier 6-Wave Mega-Pool 4D-DP + Deep Seam-fq + Contact LP
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          mkdir -p "artifacts/w12b_${SHARD_ID}" /tmp/sq_w12_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v3.npz" /tmp/sq_w12_ds/pub_base_v3.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w12_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w12_ds/
+          export SQ_DS_DIR="/tmp/sq_w12_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w12_ds/pub_base_v3.npz \
+            --win-glob "prev_wins/**/*.npz" \
+            --gadget-glob "pooled_all/w6a/**/gadgets_s*.npz" \
+            --gadget-glob "pooled_all/w7a/**/g7_*.npz" \
+            --gadget-glob "pooled_all/w8a/**/g8_*.npz" \
+            --gadget-glob "pooled_all/w9a/**/g9_*.npz" \
+            --gadget-glob "pooled_all/w10a/**/g10_*.npz" \
+            --lags-json /tmp/sq_w12_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w12b_${SHARD_ID}/w12b_megapool_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w12b_${SHARD_ID}"
+
+      - name: Upload Wave 12B Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w12b-${{ matrix.shard }}
+          path: artifacts/w12b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7

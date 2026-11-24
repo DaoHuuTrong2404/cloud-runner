@@ -309,6 +309,7 @@ def quench_composed_deep(job):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--union-npz", required=True)
+    ap.add_argument("--win-glob", action="append", default=[])
     ap.add_argument("--gadget-glob", action="append", required=True)
     ap.add_argument("--lags-json", required=True)
     ap.add_argument("--shard", type=int, default=0)
@@ -330,8 +331,37 @@ def main():
         s0, e0 = offs[n - 1], offs[n]
         sq = np.column_stack([x[s0:e0], y[s0:e0], t[s0:e0]])
         cur[n] = (float(L[n - 1]), sq)
-        if float(L[n - 1]) < math.ceil(math.sqrt(n)) - 1e-7:
-            donors.append(sq)
+
+    # Optionally merge prior winning packings so cur[n] is up-to-date AND fresh whole-packing winners become new 2D donors!
+    n_win_updated = 0
+    for pat in args.win_glob:
+        for wf in sorted(glob.glob(pat, recursive=True)):
+            try:
+                wd = np.load(wf)
+            except Exception:
+                continue
+            for k in wd.files:
+                if k.startswith("x_"):
+                    n = int(k[2:])
+                    arr = np.column_stack(
+                        [wd[f"x_{n}"], wd[f"y_{n}"], wd[f"t_{n}"]]
+                    ).astype(np.float64)
+                    if len(arr) != n:
+                        continue
+                    if float(np.max(np.abs(arr[:, 2]))) > 2.0:
+                        arr[:, 2] = np.radians(arr[:, 2])
+                    Ln = span(arr)
+                    if Ln < cur[n][0] - 1e-8:
+                        cur[n] = (Ln, arr)
+                        n_win_updated += 1
+    for n in range(1, 1001):
+        if cur[n][0] < math.ceil(math.sqrt(n)) - 1e-7:
+            donors.append(cur[n][1])
+    if n_win_updated:
+        print(
+            f"[W8B Shard {args.shard}] Updated {n_win_updated} frontier packings from --win-glob (score={sum(cur[n][0] / math.sqrt(n) - 1.0 for n in range(1, 1001)):.10f})",
+            flush=True,
+        )
 
     n_pooled = 0
     n_files = 0
