@@ -335,6 +335,7 @@ def main():
 
     n_pooled = 0
     n_files = 0
+    seen_sig = {(len(sq), round(cur[n][0], 6)) for n, (_, sq) in cur.items()}
     for pat in args.gadget_glob:
         for gf in sorted(glob.glob(pat, recursive=True)):
             try:
@@ -345,8 +346,12 @@ def main():
             for k in gd.files:
                 arr = gd[k]
                 if arr.ndim == 2 and arr.shape[1] == 3 and len(arr) >= 5:
-                    donors.append(arr.astype(np.float64))
-                    n_pooled += 1
+                    arr64 = arr.astype(np.float64)
+                    sig = (len(arr64), round(f2d.side(arr64), 6))
+                    if sig not in seen_sig:
+                        seen_sig.add(sig)
+                        donors.append(arr64)
+                        n_pooled += 1
     print(
         f"[W8B Shard {args.shard}/{args.num_shards}] MEGA-POOL loaded {len(donors)} donors ({n_pooled} shrunk/grown gadgets from {n_files} files, {time.time() - t0:.1f}s)",
         flush=True,
