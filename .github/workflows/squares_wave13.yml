@@ -1,0 +1,326 @@
+name: Squares Math Wave 13 Full-Frontier Bottleneck Surgery v2 (22.08923) -> 6-Wave Mega-Pool 4D-DP
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w13"
+        type: string
+      w6_run_id:
+        required: false
+        default: "45432243265"
+        type: string
+      w7_run_id:
+        required: false
+        default: "45445028521"
+        type: string
+      w8_run_id:
+        required: false
+        default: "45455826211"
+        type: string
+      w9_run_id:
+        required: false
+        default: "45474409055"
+        type: string
+      w10_run_id:
+        required: false
+        default: "45487524096"
+        type: string
+      w11_run_id:
+        required: false
+        default: "45495981866"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  wave13a_bottleneck_v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download 5 prior gadget waves + 6 prior winning packing waves
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w6_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w6a-w6a-*
+          path: pooled_prev/w6a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w7_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w7a-w7a-*
+          path: pooled_prev/w7a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w8_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w8a-w8a-*
+          path: pooled_prev/w8a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w9_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w9a-w9a-*
+          path: pooled_prev/w9a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w10_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w10a-w10a-*
+          path: pooled_prev/w10a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w6_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w6a-w6b-*
+          path: prev_wins/w6b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w7_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w7a-w7b-*
+          path: prev_wins/w7b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w8_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w8a-w8b-*
+          path: prev_wins/w8b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w9_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w9a-w9b-*
+          path: prev_wins/w9b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w10_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w10a-w10b-*
+          path: prev_wins/w10b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w11_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w11-s-*
+          path: prev_wins/w11
+
+      - name: Run Wave 13A Full-Frontier Bottleneck Surgery v2 Shard
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          mkdir -p "artifacts/w13a_${SHARD_ID}" /tmp/sq_w13_ds /tmp/sq_bins
+          if [ "$SHARD_ID" -le 7 ]; then
+            (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          else
+            (cd squares_math/fq_crate && cargo build --release --bin fq)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          fi
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v3.npz" /tmp/sq_w13_ds/pub_base_v3.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w13_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w13_ds/
+          export SQ_DS_DIR="/tmp/sq_w13_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          if [ "$SHARD_ID" -le 7 ]; then
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w13_ds/pub_base_v3.npz \
+              --win-glob "prev_wins/**/*.npz" \
+              --prev-glob "pooled_prev/w6a/**/gadgets_s*.npz" \
+              --prev-glob "pooled_prev/w7a/**/g7_*.npz" \
+              --prev-glob "pooled_prev/w8a/**/g8_*.npz" \
+              --prev-glob "pooled_prev/w9a/**/g9_*.npz" \
+              --prev-glob "pooled_prev/w10a/**/g10_*.npz" \
+              --lags-json /tmp/sq_w13_ds/lag_targets.json \
+              --mode bottleneck_shrink --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 3400 \
+              --out-npz "artifacts/w13a_${SHARD_ID}/g13_bn_shrink_s${SHARD_ID}.npz"
+          elif [ "$SHARD_ID" -le 15 ]; then
+            SUB=$((SHARD_ID - 8))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w13_ds/pub_base_v3.npz \
+              --win-glob "prev_wins/**/*.npz" \
+              --prev-glob "pooled_prev/w6a/**/gadgets_s*.npz" \
+              --prev-glob "pooled_prev/w7a/**/g7_*.npz" \
+              --prev-glob "pooled_prev/w8a/**/g8_*.npz" \
+              --prev-glob "pooled_prev/w9a/**/g9_*.npz" \
+              --prev-glob "pooled_prev/w10a/**/g10_*.npz" \
+              --lags-json /tmp/sq_w13_ds/lag_targets.json \
+              --mode bottleneck_grow --shard "$SUB" --num-shards 8 --procs 4 --budget-sec 3400 \
+              --out-npz "artifacts/w13a_${SHARD_ID}/g13_bn_grow_s${SUB}.npz"
+          else
+            SUB=$((SHARD_ID - 16))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w13_ds/pub_base_v3.npz \
+              --win-glob "prev_wins/**/*.npz" \
+              --prev-glob "pooled_prev/w6a/**/gadgets_s*.npz" \
+              --prev-glob "pooled_prev/w7a/**/g7_*.npz" \
+              --prev-glob "pooled_prev/w8a/**/g8_*.npz" \
+              --prev-glob "pooled_prev/w9a/**/g9_*.npz" \
+              --prev-glob "pooled_prev/w10a/**/g10_*.npz" \
+              --lags-json /tmp/sq_w13_ds/lag_targets.json \
+              --mode bottleneck_pair --shard "$SUB" --num-shards 4 --procs 4 --budget-sec 3400 \
+              --out-npz "artifacts/w13a_${SHARD_ID}/g13_bn_pair_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w13a_${SHARD_ID}"
+
+      - name: Upload Wave 13A Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w13a-${{ matrix.shard }}
+          path: artifacts/w13a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave13b_6wave_megapool_dp:
+    needs: wave13a_bottleneck_v2
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download ALL 6 Gadget Waves + ALL 6 Winning Packing Waves
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w6_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w6a-w6a-*
+          path: pooled_all/w6a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w7_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w7a-w7a-*
+          path: pooled_all/w7a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w8_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w8a-w8a-*
+          path: pooled_all/w8a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w9_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w9a-w9a-*
+          path: pooled_all/w9a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w10_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w10a-w10a-*
+          path: pooled_all/w10a
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.run_tag }}-w13a-*
+          path: pooled_all/w13a
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w6_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w6a-w6b-*
+          path: prev_wins/w6b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w7_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w7a-w7b-*
+          path: prev_wins/w7b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w8_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w8a-w8b-*
+          path: prev_wins/w8b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w9_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w9a-w9b-*
+          path: prev_wins/w9b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w10_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w10a-w10b-*
+          path: prev_wins/w10b
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w11_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w11-s-*
+          path: prev_wins/w11
+
+      - name: Run Wave 13B 6-Wave Mega-Pool 4D-DP + Deep Seam-fq + Contact LP
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          mkdir -p "artifacts/w13b_${SHARD_ID}" /tmp/sq_w13_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v3.npz" /tmp/sq_w13_ds/pub_base_v3.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w13_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w13_ds/
+          export SQ_DS_DIR="/tmp/sq_w13_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w13_ds/pub_base_v3.npz \
+            --win-glob "prev_wins/**/*.npz" \
+            --gadget-glob "pooled_all/w6a/**/gadgets_s*.npz" \
+            --gadget-glob "pooled_all/w7a/**/g7_*.npz" \
+            --gadget-glob "pooled_all/w8a/**/g8_*.npz" \
+            --gadget-glob "pooled_all/w9a/**/g9_*.npz" \
+            --gadget-glob "pooled_all/w10a/**/g10_*.npz" \
+            --gadget-glob "pooled_all/w13a/**/g13_*.npz" \
+            --lags-json /tmp/sq_w13_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w13b_${SHARD_ID}/w13b_megapool_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w13b_${SHARD_ID}"
+
+      - name: Upload Wave 13B Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w13b-${{ matrix.shard }}
+          path: artifacts/w13b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7

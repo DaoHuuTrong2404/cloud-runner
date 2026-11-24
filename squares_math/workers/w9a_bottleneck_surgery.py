@@ -52,19 +52,46 @@ def pad_to_square(sq_crop, w, h, f_box):
     ), M
 
 
-def load_pooled_donors(union_npz, prev_globs):
+def load_pooled_donors(union_npz, prev_globs, win_globs=None):
     d = np.load(union_npz)
     x, y, t, L = d["x"], d["y"], d["t"], d["L"]
     offs = [0]
     for n in range(1, 1001):
         offs.append(offs[-1] + n)
-    donors = []
+    cur_sq = {}
     cur_L = {}
     for n in range(1, 1001):
         s0, e0 = offs[n - 1], offs[n]
         cur_L[n] = float(L[n - 1])
-        if float(L[n - 1]) < math.ceil(math.sqrt(n)) - 1e-7:
-            donors.append(np.column_stack([x[s0:e0], y[s0:e0], t[s0:e0]]))
+        cur_sq[n] = np.column_stack([x[s0:e0], y[s0:e0], t[s0:e0]])
+    n_win_upd = 0
+    for pat in win_globs or []:
+        for wf in sorted(glob.glob(pat, recursive=True)):
+            try:
+                wd = np.load(wf)
+            except Exception:
+                continue
+            for k in wd.files:
+                if k.startswith("x_"):
+                    n = int(k[2:])
+                    arr = np.column_stack(
+                        [wd[f"x_{n}"], wd[f"y_{n}"], wd[f"t_{n}"]]
+                    ).astype(np.float64)
+                    if len(arr) != n:
+                        continue
+                    if float(np.max(np.abs(arr[:, 2]))) > 2.0:
+                        arr[:, 2] = np.radians(arr[:, 2])
+                    Ln = f2d.side(arr)
+                    if Ln < cur_L[n] - 1e-8:
+                        cur_L[n] = Ln
+                        cur_sq[n] = arr
+                        n_win_upd += 1
+    donors = []
+    seen_sig = set()
+    for n in range(1, 1001):
+        if cur_L[n] < math.ceil(math.sqrt(n)) - 1e-7:
+            donors.append(cur_sq[n])
+            seen_sig.add((n, round(cur_L[n], 6)))
     n_base = len(donors)
     n_prev = 0
     for pat in prev_globs:
@@ -76,8 +103,12 @@ def load_pooled_donors(union_npz, prev_globs):
             for k in gd.files:
                 arr = gd[k]
                 if arr.ndim == 2 and arr.shape[1] == 3 and len(arr) >= 5:
-                    donors.append(arr.astype(np.float64))
-                    n_prev += 1
+                    arr64 = arr.astype(np.float64)
+                    sig = (len(arr64), round(f2d.side(arr64), 6))
+                    if sig not in seen_sig:
+                        seen_sig.add(sig)
+                        donors.append(arr64)
+                        n_prev += 1
     return donors, cur_L, n_base, n_prev
 
 
@@ -500,6 +531,7 @@ def worker_one(job):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--union-npz", required=True)
+    ap.add_argument("--win-glob", action="append", default=[])
     ap.add_argument("--prev-glob", action="append", default=[])
     ap.add_argument("--lags-json", required=True)
     ap.add_argument(
@@ -515,7 +547,9 @@ def main():
     args = ap.parse_args()
 
     t0 = time.time()
-    donors, cur_L, n_base, n_prev = load_pooled_donors(args.union_npz, args.prev_glob)
+    donors, cur_L, n_base, n_prev = load_pooled_donors(
+        args.union_npz, args.prev_glob, args.win_glob
+    )
     G = f2d.extract_2d_gadgets(donors)
     dp, PG, PM, PQ = f2d.run_2d_dp(G)
     print(
