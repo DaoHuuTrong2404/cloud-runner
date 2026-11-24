@@ -1,0 +1,146 @@
+name: Squares Math Wave 6 Pooled 2D-GadgetQ + Global 4D-DP Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        description: "Run identifier for artifacts"
+        required: true
+        default: "w6a"
+        type: string
+      per_shard_gadgets:
+        description: "Number of stratified 2D gadgets to quench per factory shard (x16 shards)"
+        required: false
+        default: "420"
+        type: string
+      bfm_minutes:
+        description: "Minutes for bandflip+melt+stretch shards (16..19)"
+        required: false
+        default: "26"
+        type: string
+
+jobs:
+  wave6a_factory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Run Wave 6A Shard
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+          PER_SHARD: ${{ inputs.per_shard_gadgets }}
+          BFM_MINS: ${{ inputs.bfm_minutes }}
+        run: |
+          mkdir -p "artifacts/w6a_${SHARD_ID}" /tmp/sq_w6_ds /tmp/sq_bins
+          if [ "$SHARD_ID" -le 15 ]; then
+            (cd squares_math/fq_crate && cargo build --release --bin fq)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          else
+            (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          fi
+          ln -sf "$(pwd)/squares_math/seeds/pub_base.npz" /tmp/sq_w6_ds/nov24_union.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w6_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w6_ds/
+          export SQ_DS_DIR="/tmp/sq_w6_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          if [ "$SHARD_ID" -le 15 ]; then
+            python3 -u squares_math/workers/w6a_gadgetq_factory.py \
+              --union-npz /tmp/sq_w6_ds/nov24_union.npz \
+              --shard "$SHARD_ID" --num-shards 16 --per-shard "$PER_SHARD" --procs 4 \
+              --out-npz "artifacts/w6a_${SHARD_ID}/gadgets_s${SHARD_ID}.npz"
+          else
+            SUB=$((SHARD_ID - 16))
+            python3 -u squares_math/workers/w6a_bandflip_melt_stretch.py \
+              --union-npz /tmp/sq_w6_ds/nov24_union.npz \
+              --lags-json /tmp/sq_w6_ds/lag_targets.json \
+              --shard "$SUB" --num-shards 4 --max-targets 160 --minutes-total "$BFM_MINS" --procs 4 \
+              --out-npz "artifacts/w6a_${SHARD_ID}/bfm_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w6a_${SHARD_ID}"
+
+      - name: Upload Wave 6A Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w6a-${{ matrix.shard }}
+          path: artifacts/w6a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave6b_unified_dp:
+    needs: wave6a_factory
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download all pooled Wave 6A gadget banks
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.run_tag }}-w6a-*
+          path: pooled_w6a
+
+      - name: Run Wave 6B Global Pooled 4D-DP + Deep Seam-fq
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          mkdir -p "artifacts/w6b_${SHARD_ID}" /tmp/sq_w6_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base.npz" /tmp/sq_w6_ds/nov24_union.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w6_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w6_ds/
+          export SQ_DS_DIR="/tmp/sq_w6_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          ls -la pooled_w6a/ || true
+          python3 -u squares_math/workers/w6b_unified_dp_seamfq.py \
+            --union-npz /tmp/sq_w6_ds/nov24_union.npz \
+            --gadget-glob "pooled_w6a/**/gadgets_s*.npz" \
+            --lags-json /tmp/sq_w6_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w6b_${SHARD_ID}/w6b_pooled_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w6b_${SHARD_ID}"
+
+      - name: Upload Wave 6B Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w6b-${{ matrix.shard }}
+          path: artifacts/w6b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
