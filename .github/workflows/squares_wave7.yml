@@ -1,0 +1,137 @@
+name: Squares Math Wave 7 FaultDP-Grow + PairSeam + DeepQ Pooled 4D-DP Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        description: "Run identifier for artifacts"
+        required: true
+        default: "w7a"
+        type: string
+      per_shard_grow:
+        description: "Number of gadgets per grow/deepq shard"
+        required: false
+        default: "340"
+        type: string
+
+jobs:
+  wave7a_factory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Run Wave 7A Shard
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+          PER_SHARD: ${{ inputs.per_shard_grow }}
+        run: |
+          mkdir -p "artifacts/w7a_${SHARD_ID}" /tmp/sq_w7_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base.npz" /tmp/sq_w7_ds/nov24_union.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w7_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w7_ds/
+          export SQ_DS_DIR="/tmp/sq_w7_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          if [ "$SHARD_ID" -le 9 ]; then
+            python3 -u squares_math/workers/w7a_gadget_grow.py \
+              --union-npz /tmp/sq_w7_ds/nov24_union.npz \
+              --mode grow --shard "$SHARD_ID" --num-shards 10 --per-shard "$PER_SHARD" --procs 4 \
+              --out-npz "artifacts/w7a_${SHARD_ID}/g7_grow_s${SHARD_ID}.npz"
+          elif [ "$SHARD_ID" -le 15 ]; then
+            SUB=$((SHARD_ID - 10))
+            python3 -u squares_math/workers/w7a_gadget_grow.py \
+              --union-npz /tmp/sq_w7_ds/nov24_union.npz \
+              --mode deepq --shard "$SUB" --num-shards 6 --per-shard "$PER_SHARD" --procs 4 \
+              --out-npz "artifacts/w7a_${SHARD_ID}/g7_deepq_s${SUB}.npz"
+          else
+            SUB=$((SHARD_ID - 16))
+            python3 -u squares_math/workers/w7a_seam_pair_quench.py \
+              --union-npz /tmp/sq_w7_ds/nov24_union.npz \
+              --shard "$SUB" --num-shards 4 --procs 4 \
+              --out-npz "artifacts/w7a_${SHARD_ID}/g7_pair_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w7a_${SHARD_ID}"
+
+      - name: Upload Wave 7A Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w7a-${{ matrix.shard }}
+          path: artifacts/w7a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave7b_unified_dp:
+    needs: wave7a_factory
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download all pooled Wave 7A gadget banks
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.run_tag }}-w7a-*
+          path: pooled_w7a
+
+      - name: Run Wave 7B Global Pooled 4D-DP + Deep Seam-fq
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          mkdir -p "artifacts/w7b_${SHARD_ID}" /tmp/sq_w7_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base.npz" /tmp/sq_w7_ds/nov24_union.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w7_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w7_ds/
+          export SQ_DS_DIR="/tmp/sq_w7_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w6b_unified_dp_seamfq.py \
+            --union-npz /tmp/sq_w7_ds/nov24_union.npz \
+            --gadget-glob "pooled_w7a/**/g7_*.npz" \
+            --lags-json /tmp/sq_w7_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w7b_${SHARD_ID}/w7b_pooled_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w7b_${SHARD_ID}"
+
+      - name: Upload Wave 7B Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w7b-${{ matrix.shard }}
+          path: artifacts/w7b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
