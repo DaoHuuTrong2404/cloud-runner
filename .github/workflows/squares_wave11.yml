@@ -1,0 +1,137 @@
+name: Squares Math Wave 11 Orthogonal Whole-Packing Assault (Multi-Cut Stretch + Bandflip/Melt + Insert1-RP/Delete1-2)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w11"
+        type: string
+      w6_run_id:
+        required: false
+        default: "45432243265"
+        type: string
+      w7_run_id:
+        required: false
+        default: "45445028521"
+        type: string
+      w8_run_id:
+        required: false
+        default: "45455826211"
+        type: string
+      w9_run_id:
+        required: false
+        default: "45474409055"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  wave11_orthogonal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download Wave 6B wins
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w6_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w6a-w6b-*
+          path: prev_wins/w6b
+
+      - name: Download Wave 7B wins
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w7_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w7a-w7b-*
+          path: prev_wins/w7b
+
+      - name: Download Wave 8B wins
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w8_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w8a-w8b-*
+          path: prev_wins/w8b
+
+      - name: Download Wave 9B wins
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w9_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: w9a-w9b-*
+          path: prev_wins/w9b
+
+      - name: Run Wave 11 Orthogonal Shard
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          mkdir -p "artifacts/w11_${SHARD_ID}" /tmp/sq_w11_ds /tmp/sq_bins
+          if [ "$SHARD_ID" -ge 8 ] && [ "$SHARD_ID" -le 13 ]; then
+            (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          else
+            (cd squares_math/fq_crate && cargo build --release --bin fq)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          fi
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v3.npz" /tmp/sq_w11_ds/pub_base_v3.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w11_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w11_ds/
+          export SQ_DS_DIR="/tmp/sq_w11_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          if [ "$SHARD_ID" -le 7 ]; then
+            python3 -u squares_math/workers/w11_orthogonal_assault.py \
+              --union-npz /tmp/sq_w11_ds/pub_base_v3.npz \
+              --win-glob "prev_wins/**/*.npz" \
+              --lags-json /tmp/sq_w11_ds/lag_targets.json \
+              --mode stretch_all --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 3500 \
+              --out-npz "artifacts/w11_${SHARD_ID}/w11_stretch_s${SHARD_ID}.npz"
+          elif [ "$SHARD_ID" -le 13 ]; then
+            SUB=$((SHARD_ID - 8))
+            python3 -u squares_math/workers/w11_orthogonal_assault.py \
+              --union-npz /tmp/sq_w11_ds/pub_base_v3.npz \
+              --win-glob "prev_wins/**/*.npz" \
+              --lags-json /tmp/sq_w11_ds/lag_targets.json \
+              --mode bandflip_melt --shard "$SUB" --num-shards 6 --procs 4 --budget-sec 3500 \
+              --out-npz "artifacts/w11_${SHARD_ID}/w11_bfmelt_s${SUB}.npz"
+          else
+            SUB=$((SHARD_ID - 14))
+            python3 -u squares_math/workers/w11_orthogonal_assault.py \
+              --union-npz /tmp/sq_w11_ds/pub_base_v3.npz \
+              --win-glob "prev_wins/**/*.npz" \
+              --lags-json /tmp/sq_w11_ds/lag_targets.json \
+              --mode insert_delete --shard "$SUB" --num-shards 6 --procs 4 --budget-sec 3500 \
+              --out-npz "artifacts/w11_${SHARD_ID}/w11_insdel_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w11_${SHARD_ID}"
+
+      - name: Upload Wave 11 Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-s-${{ matrix.shard }}
+          path: artifacts/w11_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
