@@ -1,0 +1,119 @@
+name: "Squares Math Wave 19 Top-120 Deep Peel+Cascade + W17A-Fresh Basin-Cascade (64 Free Cores)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w19"
+        type: string
+      w17_run_id:
+        description: "Run ID containing w17-megapool-bundle and w17-w17ab-bundle"
+        required: false
+        default: "45533445596"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_pool_w19:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Pack w17-megapool-bundle + w17-w17ab-bundle ONCE (2 API calls total!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w17_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w17-megapool-bundle" -D .
+          gh run download "${{ inputs.w17_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w17-w17ab-bundle" -D .
+          tar -xf megapool_7wave.tar
+          tar -xf w17ab_wins.tar
+          rm -f megapool_7wave.tar w17ab_wins.tar
+          mkdir -p pool/wins/w17ab pool/recent_w17a
+          find w17ab_out -name "*.npz" -exec cp {} pool/wins/w17ab/ \;
+          find w17ab_out -name "w17a_peel_*.npz" -exec cp {} pool/recent_w17a/ \;
+          find w17ab_out -name "w17b_escape_*.npz" -exec cp {} pool/recent_w17a/ \;
+          rm -rf w17ab_out
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l) | Fresh W17AB: $(find pool/recent_w17a -name '*.npz' | wc -l)"
+          tar -cf megapool_w19.tar pool
+          ls -lh megapool_w19.tar
+
+      - name: Upload single consolidated W19 archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w19.tar
+          retention-days: 7
+
+  wave19a_top120_peel_and_w17a_cascade:
+    needs: consolidate_pool_w19
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated W19 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+
+      - name: Run Wave 19 Shard (0..9 Top-120 Deep Peel+Stretch+Del, 10..15 Iterative Cascade on Fresh W17A/B Winners!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w19.tar
+          mkdir -p "artifacts/w19_${SHARD_ID}" /tmp/sq_w19_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v4.npz" /tmp/sq_w19_ds/pub_base_v4.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w19_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w19_ds/
+          export SQ_DS_DIR="/tmp/sq_w19_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          if [ "$SHARD_ID" -le 9 ]; then
+            python3 -u squares_math/workers/w19a_top120_deep_peel_cascade.py \
+              --union-npz /tmp/sq_w19_ds/pub_base_v4.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --lags-json /tmp/sq_w19_ds/lag_targets.json \
+              --shard "$SHARD_ID" --num-shards 10 --procs 4 --budget-sec 3550 \
+              --out-npz "artifacts/w19_${SHARD_ID}/w19a_deep_peel_s${SHARD_ID}.npz"
+          else
+            SUB=$((SHARD_ID - 10))
+            python3 -u squares_math/workers/w18a_iterative_basin_cascade.py \
+              --union-npz /tmp/sq_w19_ds/pub_base_v4.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --recent-glob "pool/recent_w17a/*.npz" \
+              --lags-json /tmp/sq_w19_ds/lag_targets.json \
+              --shard "$SUB" --num-shards 6 --procs 4 --budget-sec 3550 \
+              --out-npz "artifacts/w19_${SHARD_ID}/w19b_w17a_cascade_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w19_${SHARD_ID}"
+
+      - name: Upload Wave 19 Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-s-${{ matrix.shard }}
+          path: artifacts/w19_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
