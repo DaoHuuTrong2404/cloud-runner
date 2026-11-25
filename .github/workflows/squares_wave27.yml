@@ -1,0 +1,87 @@
+name: "Squares Math Wave 27 Lightning 28-Min Top-40 Final Sprint (112 Free Cores -> Synchronized with W26D!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w27"
+        type: string
+      w26_run_id:
+        required: false
+        default: "45590692046"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  wave27_lightning_sprint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25","26","27"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download 2 already-consolidated W26 archives (2 API calls total!)
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w26_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: w26-megapool-bundle
+          path: .
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.w26_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: w26-w26ab-bundle
+          path: .
+
+      - name: Run Wave 27 Lightning Top-40 Sprint Shard (8 puzzles, 28m budget, 4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w26.tar
+          tar -xf w26ab_bundle.tar
+          mkdir -p "artifacts/w27_${SHARD_ID}" /tmp/sq_w27_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w27_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w27_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w27_ds/
+          export SQ_DS_DIR="/tmp/sq_w27_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          python3 -u squares_math/workers/w27_top40_final_sprint.py \
+            --union-npz /tmp/sq_w27_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --win-glob "w26ab_out/**/w26a_*.npz" \
+            --lags-json /tmp/sq_w27_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 28 --procs 4 --budget-sec 1680 \
+            --out-npz "artifacts/w27_${SHARD_ID}/w27_sprint_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w27_${SHARD_ID}"
+
+      - name: Upload Wave 27 Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-s-${{ matrix.shard }}
+          path: artifacts/w27_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
