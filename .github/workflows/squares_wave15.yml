@@ -1,0 +1,188 @@
+name: Squares Math Wave 15 Deep-Escape Melt + 22.08896 Bottleneck Surgery (Single-Archive 0 Rate Limit!)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w15"
+        type: string
+      bundle_run_id:
+        description: "Run ID containing consolidated w14-megapool-bundle"
+        required: false
+        default: "45516414251"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  wave15a_dual_assault:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated 6-wave Mega-Pool archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.bundle_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: w14-megapool-bundle
+          path: .
+
+      - name: Run Wave 15A Shard (0..9 Deep-Escape Melt, 10..14 Bottleneck-Shrink, 15..19 Bottleneck-Grow)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_6wave.tar
+          mkdir -p "artifacts/w15a_${SHARD_ID}" /tmp/sq_w15_ds /tmp/sq_bins
+          if [ "$SHARD_ID" -le 14 ]; then
+            (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          else
+            (cd squares_math/fq_crate && cargo build --release --bin fq)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          fi
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v3.npz" /tmp/sq_w15_ds/pub_base_v3.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w15_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w15_ds/
+          export SQ_DS_DIR="/tmp/sq_w15_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          if [ "$SHARD_ID" -le 9 ]; then
+            python3 -u squares_math/workers/w15a_deep_escape_melt.py \
+              --union-npz /tmp/sq_w15_ds/pub_base_v3.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --lags-json /tmp/sq_w15_ds/lag_targets.json \
+              --shard "$SHARD_ID" --num-shards 10 --procs 4 --budget-sec 3700 \
+              --out-npz "artifacts/w15a_${SHARD_ID}/w15a_escape_s${SHARD_ID}.npz"
+          elif [ "$SHARD_ID" -le 14 ]; then
+            SUB=$((SHARD_ID - 10))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w15_ds/pub_base_v3.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --prev-glob "pool/gadgets/w6a/**/gadgets_s*.npz" \
+              --prev-glob "pool/gadgets/w7a/**/g7_*.npz" \
+              --prev-glob "pool/gadgets/w8a/**/g8_*.npz" \
+              --prev-glob "pool/gadgets/w9a/**/g9_*.npz" \
+              --prev-glob "pool/gadgets/w10a/**/g10_*.npz" \
+              --prev-glob "pool/gadgets/w13a/**/g13_*.npz" \
+              --lags-json /tmp/sq_w15_ds/lag_targets.json \
+              --mode bottleneck_shrink --shard "$SUB" --num-shards 5 --procs 4 --budget-sec 3400 \
+              --out-npz "artifacts/w15a_${SHARD_ID}/g15_bn_shrink_s${SUB}.npz"
+          else
+            SUB=$((SHARD_ID - 15))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w15_ds/pub_base_v3.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --prev-glob "pool/gadgets/w6a/**/gadgets_s*.npz" \
+              --prev-glob "pool/gadgets/w7a/**/g7_*.npz" \
+              --prev-glob "pool/gadgets/w8a/**/g8_*.npz" \
+              --prev-glob "pool/gadgets/w9a/**/g9_*.npz" \
+              --prev-glob "pool/gadgets/w10a/**/g10_*.npz" \
+              --prev-glob "pool/gadgets/w13a/**/g13_*.npz" \
+              --lags-json /tmp/sq_w15_ds/lag_targets.json \
+              --mode bottleneck_grow --shard "$SUB" --num-shards 5 --procs 4 --budget-sec 3400 \
+              --out-npz "artifacts/w15a_${SHARD_ID}/g15_bn_grow_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w15a_${SHARD_ID}"
+
+      - name: Upload Wave 15A Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w15a-${{ matrix.shard }}
+          path: artifacts/w15a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave15b_final_7wave_dp:
+    needs: wave15a_dual_assault
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated 6-wave bundle + Wave 15A outputs
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.bundle_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: w14-megapool-bundle
+          path: .
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.run_tag }}-w15a-*
+          path: w15a_out
+
+      - name: Run Wave 15B Final 7-Wave Full-Frontier Mega-Pool 4D-DP + Deep Seam-fq + Contact LP
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_6wave.tar
+          mkdir -p "artifacts/w15b_${SHARD_ID}" /tmp/sq_w15_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v3.npz" /tmp/sq_w15_ds/pub_base_v3.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w15_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w15_ds/
+          export SQ_DS_DIR="/tmp/sq_w15_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w15_ds/pub_base_v3.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --win-glob "w15a_out/**/w15a_escape_*.npz" \
+            --gadget-glob "pool/gadgets/w6a/**/gadgets_s*.npz" \
+            --gadget-glob "pool/gadgets/w7a/**/g7_*.npz" \
+            --gadget-glob "pool/gadgets/w8a/**/g8_*.npz" \
+            --gadget-glob "pool/gadgets/w9a/**/g9_*.npz" \
+            --gadget-glob "pool/gadgets/w10a/**/g10_*.npz" \
+            --gadget-glob "pool/gadgets/w13a/**/g13_*.npz" \
+            --gadget-glob "w15a_out/**/g15_*.npz" \
+            --lags-json /tmp/sq_w15_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w15b_${SHARD_ID}/w15b_megapool_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w15b_${SHARD_ID}"
+
+      - name: Upload Wave 15B Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w15b-${{ matrix.shard }}
+          path: artifacts/w15b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
