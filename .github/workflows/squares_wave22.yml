@@ -1,0 +1,104 @@
+name: "Squares Math Wave 22 Fixed-D Convexity-Bump Anomaly Sniper (40 Free Cores -> Top-60 Phase-Transition Targets!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w22"
+        type: string
+      w20_run_id:
+        required: false
+        default: "45548327918"
+        type: string
+      w21_run_id:
+        required: false
+        default: "45556346435"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_pool_w22:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Consolidate W21 megapool + ALL 12 finished W20B shards (incl. n=642 -0.00666!) ONCE
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w21_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w21-megapool-bundle" -D .
+          tar -xf megapool_w21.tar
+          rm -f megapool_w21.tar
+          mkdir -p pool/wins/w20b_all
+          gh run download "${{ inputs.w20_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w20-w20b-*" -D pool/wins/w20b_all || true
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w22.tar pool
+          ls -lh megapool_w22.tar
+
+      - name: Upload single consolidated W22 archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w22.tar
+          retention-days: 7
+
+  wave22_convexity_sniper:
+    needs: consolidate_pool_w22
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated W22 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+
+      - name: Run Wave 22 Fixed-D Convexity-Bump Anomaly Sniper Shard (4 cores, 6 puzzles!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w22.tar
+          mkdir -p "artifacts/w22_${SHARD_ID}" /tmp/sq_w22_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w22_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w22_ds/
+          export SQ_DS_DIR="/tmp/sq_w22_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          python3 -u squares_math/workers/w22_convexity_anomaly_sniper.py \
+            --union-npz /tmp/sq_w22_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --shard "$SHARD_ID" --num-shards 10 --procs 4 --budget-sec 3550 \
+            --out-npz "artifacts/w22_${SHARD_ID}/w22_anom_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w22_${SHARD_ID}"
+
+      - name: Upload Wave 22 Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-s-${{ matrix.shard }}
+          path: artifacts/w22_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
