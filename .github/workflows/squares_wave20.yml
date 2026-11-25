@@ -1,0 +1,187 @@
+name: "Squares Math Wave 20 Grand 9-Wave 4D-DP (g18 Gadgets) + Box-Expanded Dual-Melt Cascade (96 Free Cores)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w20"
+        type: string
+      w17_run_id:
+        required: false
+        default: "45533445596"
+        type: string
+      w18_run_id:
+        required: false
+        default: "45537971231"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_pool_w20:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Consolidate 7-wave bundle + W17A/B/C + W18A wins & fresh g18 gadgets ONCE (0 rate limit!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w17_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w17-megapool-bundle" -D .
+          gh run download "${{ inputs.w17_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w17-w17ab-bundle" -D .
+          tar -xf megapool_7wave.tar
+          tar -xf w17ab_wins.tar
+          rm -f megapool_7wave.tar w17ab_wins.tar
+          mkdir -p pool/wins/w17ab pool/wins/w17c pool/wins/w18a pool/gadgets/w18a pool/recent_w18
+          find w17ab_out -name "*.npz" -exec cp {} pool/wins/w17ab/ \;
+          rm -rf w17ab_out
+
+          gh run download "${{ inputs.w17_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w17-w17c-*" -D pool/wins/w17c || true
+          gh run download "${{ inputs.w18_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w18-w18a-*" -D pool/w18a_raw || true
+          find pool/w18a_raw -name "w18a_cascade_*.npz" -exec cp {} pool/wins/w18a/ \;
+          find pool/w18a_raw -name "g18_*.npz"          -exec cp {} pool/gadgets/w18a/ \;
+          rm -rf pool/w18a_raw
+
+          find pool/wins/w17c pool/wins/w18a -name "*.npz" -exec cp {} pool/recent_w18/ \;
+
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          echo "Recent W18:  $(find pool/recent_w18 -name '*.npz' | wc -l)"
+          tar -cf megapool_w20.tar pool
+          ls -lh megapool_w20.tar
+
+      - name: Upload single consolidated 9-wave W20 archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w20.tar
+          retention-days: 7
+
+  wave20a_grand_9wave_dp:
+    needs: consolidate_pool_w20
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated W20 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+
+      - name: Run Wave 20A Grand 9-Wave Full-Frontier Mega-Pool 4D-DP + Deep Seam-fq + Contact LP
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w20.tar
+          mkdir -p "artifacts/w20a_${SHARD_ID}" /tmp/sq_w20_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v4.npz" /tmp/sq_w20_ds/pub_base_v4.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w20_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w20_ds/
+          export SQ_DS_DIR="/tmp/sq_w20_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w20_ds/pub_base_v4.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --gadget-glob "pool/gadgets/w6a/**/gadgets_s*.npz" \
+            --gadget-glob "pool/gadgets/w7a/**/g7_*.npz" \
+            --gadget-glob "pool/gadgets/w8a/**/g8_*.npz" \
+            --gadget-glob "pool/gadgets/w9a/**/g9_*.npz" \
+            --gadget-glob "pool/gadgets/w10a/**/g10_*.npz" \
+            --gadget-glob "pool/gadgets/w13a/**/g13_*.npz" \
+            --gadget-glob "pool/gadgets/w15a/**/g15_*.npz" \
+            --gadget-glob "pool/gadgets/w18a/**/g18_*.npz" \
+            --lags-json /tmp/sq_w20_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w20a_${SHARD_ID}/w20a_megapool_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w20a_${SHARD_ID}"
+
+      - name: Upload Wave 20A Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w20a-${{ matrix.shard }}
+          path: artifacts/w20a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave20b_expanded_dual_melt:
+    needs: consolidate_pool_w20
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated W20 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+
+      - name: Run Wave 20B Box-Expanded Dual-Center Melt + Iterative 4-Round Cascade Shard (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w20.tar
+          mkdir -p "artifacts/w20b_${SHARD_ID}" /tmp/sq_w20_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v4.npz" /tmp/sq_w20_ds/pub_base_v4.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w20_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w20_ds/
+          export SQ_DS_DIR="/tmp/sq_w20_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          python3 -u squares_math/workers/w20b_expanded_dual_melt_cascade.py \
+            --union-npz /tmp/sq_w20_ds/pub_base_v4.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --recent-glob "pool/recent_w18/*.npz" \
+            --lags-json /tmp/sq_w20_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 --budget-sec 3400 \
+            --out-npz "artifacts/w20b_${SHARD_ID}/w20b_exmelt_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w20b_${SHARD_ID}"
+
+      - name: Upload Wave 20B Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w20b-${{ matrix.shard }}
+          path: artifacts/w20b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
