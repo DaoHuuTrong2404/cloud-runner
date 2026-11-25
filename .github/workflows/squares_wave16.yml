@@ -1,0 +1,77 @@
+name: Squares Math Wave 16 Top-20 Biggest-Gap Global Topology Sniper (80 Free Cores: 1 Dedicated 4-Core Runner Per Puzzle!)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w16"
+        type: string
+      bundle_run_id:
+        required: false
+        default: "45516414251"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  wave16_top20_sniper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated 6-wave Mega-Pool archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.bundle_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: w14-megapool-bundle
+          path: .
+
+      - name: Run Wave 16 Top-20 Global Topology Sniper Shard
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_6wave.tar
+          mkdir -p "artifacts/w16_${SHARD_ID}" /tmp/sq_w16_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v3.npz" /tmp/sq_w16_ds/pub_base_v3.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w16_ds/
+          export SQ_DS_DIR="/tmp/sq_w16_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          python3 -u squares_math/workers/w16_top20_sniper.py \
+            --union-npz /tmp/sq_w16_ds/pub_base_v3.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --shard "$SHARD_ID" --procs 4 --budget-sec 3500 \
+            --out-npz "artifacts/w16_${SHARD_ID}/w16_sniper_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w16_${SHARD_ID}"
+
+      - name: Upload Wave 16 Sniper Hit
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-s-${{ matrix.shard }}
+          path: artifacts/w16_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
