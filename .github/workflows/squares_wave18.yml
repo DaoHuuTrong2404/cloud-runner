@@ -1,0 +1,142 @@
+name: "Squares Math Wave 18 Iterative Basin-Cascade + Fresh-Frontier Gadget Surgery (80 Free Cores)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w18"
+        type: string
+      w17_run_id:
+        description: "Run ID containing w17-megapool-bundle and finished w17-w17b-* shards"
+        required: false
+        default: "45533445596"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_pool_w18:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Pack w17-megapool-bundle + finished w17b wins ONCE (1 runner = 0 rate limit!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w17_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w17-megapool-bundle" -D .
+          tar -xf megapool_7wave.tar
+          rm -f megapool_7wave.tar
+          mkdir -p pool/wins/w17b
+          gh run download "${{ inputs.w17_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w17-w17b-*" -D pool/wins/w17b || true
+          find pool/wins/w17b -name "*.npz" -exec cp {} pool/recent/ \;
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l) | Recent NPZs: $(find pool/recent -name '*.npz' | wc -l)"
+          tar -cf megapool_w18.tar pool
+          ls -lh megapool_w18.tar
+
+      - name: Upload single consolidated W18 archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w18.tar
+          retention-days: 7
+
+  wave18a_dual_assault:
+    needs: consolidate_pool_w18
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated W18 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+
+      - name: Run Wave 18A Shard (0..9 Iterative Basin-Cascade, 10..14 Bottleneck-Shrink, 15..19 Bottleneck-Grow)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w18.tar
+          mkdir -p "artifacts/w18a_${SHARD_ID}" /tmp/sq_w18_ds /tmp/sq_bins
+          if [ "$SHARD_ID" -le 14 ]; then
+            (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          else
+            (cd squares_math/fq_crate && cargo build --release --bin fq)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          fi
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v4.npz" /tmp/sq_w18_ds/pub_base_v4.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w18_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w18_ds/
+          export SQ_DS_DIR="/tmp/sq_w18_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          if [ "$SHARD_ID" -le 9 ]; then
+            python3 -u squares_math/workers/w18a_iterative_basin_cascade.py \
+              --union-npz /tmp/sq_w18_ds/pub_base_v4.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --recent-glob "pool/recent/*.npz" \
+              --lags-json /tmp/sq_w18_ds/lag_targets.json \
+              --shard "$SHARD_ID" --num-shards 10 --procs 4 --budget-sec 3550 \
+              --out-npz "artifacts/w18a_${SHARD_ID}/w18a_cascade_s${SHARD_ID}.npz"
+          elif [ "$SHARD_ID" -le 14 ]; then
+            SUB=$((SHARD_ID - 10))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w18_ds/pub_base_v4.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --prev-glob "pool/gadgets/w6a/**/gadgets_s*.npz" \
+              --prev-glob "pool/gadgets/w7a/**/g7_*.npz" \
+              --prev-glob "pool/gadgets/w8a/**/g8_*.npz" \
+              --prev-glob "pool/gadgets/w9a/**/g9_*.npz" \
+              --prev-glob "pool/gadgets/w10a/**/g10_*.npz" \
+              --prev-glob "pool/gadgets/w13a/**/g13_*.npz" \
+              --prev-glob "pool/gadgets/w15a/**/g15_*.npz" \
+              --lags-json /tmp/sq_w18_ds/lag_targets.json \
+              --mode bottleneck_shrink --shard "$SUB" --num-shards 5 --procs 4 --budget-sec 3400 \
+              --out-npz "artifacts/w18a_${SHARD_ID}/g18_bn_shrink_s${SUB}.npz"
+          else
+            SUB=$((SHARD_ID - 15))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w18_ds/pub_base_v4.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --prev-glob "pool/gadgets/w6a/**/gadgets_s*.npz" \
+              --prev-glob "pool/gadgets/w7a/**/g7_*.npz" \
+              --prev-glob "pool/gadgets/w8a/**/g8_*.npz" \
+              --prev-glob "pool/gadgets/w9a/**/g9_*.npz" \
+              --prev-glob "pool/gadgets/w10a/**/g10_*.npz" \
+              --prev-glob "pool/gadgets/w13a/**/g13_*.npz" \
+              --prev-glob "pool/gadgets/w15a/**/g15_*.npz" \
+              --lags-json /tmp/sq_w18_ds/lag_targets.json \
+              --mode bottleneck_grow --shard "$SUB" --num-shards 5 --procs 4 --budget-sec 3400 \
+              --out-npz "artifacts/w18a_${SHARD_ID}/g18_bn_grow_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w18a_${SHARD_ID}"
+
+      - name: Upload Wave 18A Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w18a-${{ matrix.shard }}
+          path: artifacts/w18a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
