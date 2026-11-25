@@ -1,0 +1,206 @@
+name: "Squares Math Wave 21 Phase-Transition Box-Expanded Multi-Center Melt (120 Free Cores) + Grand 10-Wave 4D-DP"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w21"
+        type: string
+      w19_run_id:
+        required: false
+        default: "45545785888"
+        type: string
+      w20_run_id:
+        required: false
+        default: "45548327918"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_pool_w21:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Consolidate W20 megapool + W19 + W20A + completed W20B wins ONCE (0 rate limit!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w20_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w20-megapool-bundle" -D .
+          tar -xf megapool_w20.tar
+          rm -f megapool_w20.tar
+          mkdir -p pool/wins/w19 pool/wins/w20a pool/wins/w20b pool/recent_w21
+          gh run download "${{ inputs.w19_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w19-s-*"    -D pool/wins/w19  || true
+          gh run download "${{ inputs.w20_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w20-w20a-*" -D pool/wins/w20a || true
+          gh run download "${{ inputs.w20_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w20-w20b-*" -D pool/wins/w20b || true
+          find pool/wins/w19 pool/wins/w20a pool/wins/w20b -name "*.npz" -exec cp {} pool/recent_w21/ \;
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          echo "Recent W21:  $(find pool/recent_w21 -name '*.npz' | wc -l)"
+          tar -cf megapool_w21.tar pool
+          ls -lh megapool_w21.tar
+
+      - name: Upload single consolidated W21 archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w21.tar
+          retention-days: 7
+
+  wave21a_phase_transition:
+    needs: consolidate_pool_w21
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25","26","27","28","29"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated W21 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+
+      - name: Run Wave 21A Phase-Transition Box-Expanded Multi-Center Melt Shard (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w21.tar
+          mkdir -p "artifacts/w21a_${SHARD_ID}" /tmp/sq_w21_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w21_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w21_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w21_ds/
+          export SQ_DS_DIR="/tmp/sq_w21_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          python3 -u squares_math/workers/w21a_phase_transition_exmelt.py \
+            --union-npz /tmp/sq_w21_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --recent-glob "pool/recent_w21/*.npz" \
+            --lags-json /tmp/sq_w21_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 30 --procs 4 --budget-sec 3450 \
+            --out-npz "artifacts/w21a_${SHARD_ID}/w21a_phase_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w21a_${SHARD_ID}"
+
+      - name: Upload Wave 21A Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w21a-${{ matrix.shard }}
+          path: artifacts/w21a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave21b_consolidate_for_dp:
+    needs: wave21a_phase_transition
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Pack W21A phase-transition wins into single archive
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.run_tag }}-w21a-*
+          path: w21a_out
+      - run: |
+          echo "W21A NPZs: $(find w21a_out -name '*.npz' | wc -l)"
+          tar -cf w21a_wins.tar w21a_out
+          ls -lh w21a_wins.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-w21a-bundle
+          path: w21a_wins.tar
+          retention-days: 7
+
+  wave21c_grand_10wave_dp:
+    needs: wave21b_consolidate_for_dp
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download 2 single archives (2 API calls total!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-w21a-bundle
+          path: .
+
+      - name: Run Wave 21C Grand 10-Wave Full-Frontier Mega-Pool 4D-DP + Deep Seam-fq + Contact LP
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w21.tar
+          tar -xf w21a_wins.tar
+          mkdir -p "artifacts/w21c_${SHARD_ID}" /tmp/sq_w21_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w21_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w21_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w21_ds/
+          export SQ_DS_DIR="/tmp/sq_w21_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w21_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --win-glob "w21a_out/**/*.npz" \
+            --gadget-glob "pool/gadgets/w6a/**/gadgets_s*.npz" \
+            --gadget-glob "pool/gadgets/w7a/**/g7_*.npz" \
+            --gadget-glob "pool/gadgets/w8a/**/g8_*.npz" \
+            --gadget-glob "pool/gadgets/w9a/**/g9_*.npz" \
+            --gadget-glob "pool/gadgets/w10a/**/g10_*.npz" \
+            --gadget-glob "pool/gadgets/w13a/**/g13_*.npz" \
+            --gadget-glob "pool/gadgets/w15a/**/g15_*.npz" \
+            --gadget-glob "pool/gadgets/w18a/**/g18_*.npz" \
+            --lags-json /tmp/sq_w21_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w21c_${SHARD_ID}/w21c_megapool_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w21c_${SHARD_ID}"
+
+      - name: Upload Wave 21C Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w21c-${{ matrix.shard }}
+          path: artifacts/w21c_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
