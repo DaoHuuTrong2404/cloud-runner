@@ -1,0 +1,287 @@
+name: "Squares Math Wave 17 Full-160-Core Assault (All-580 Peel+Stretch+Del + Untouched Deep-Escape + Grand 8-Wave DP)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w17"
+        type: string
+      w14_bundle_run_id:
+        description: "Run ID containing consolidated w14-megapool-bundle"
+        required: false
+        default: "45516414251"
+        type: string
+      w15_run_id:
+        description: "Run ID containing Wave 15A + 15B outputs"
+        required: false
+        default: "45517116051"
+        type: string
+      w16_run_id:
+        description: "Run ID containing Wave 16 Top-20 Sniper outputs"
+        required: false
+        default: "45524022794"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_pool_w17:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download 6-wave bundle + Wave 14B/15A/15B/16 ONCE (1 runner = 0 rate limit!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p pool/gadgets pool/wins pool/recent
+          gh run download "${{ inputs.w14_bundle_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w14-megapool-bundle" -D .
+          tar -xf megapool_6wave.tar
+          rm -f megapool_6wave.tar
+
+          dl() {
+            local rid="$1" pat="$2" dst="$3"
+            mkdir -p "$dst"
+            gh run download "$rid" --repo DaoHuuTrong2404/cloud-runner -p "$pat" -D "$dst" || true
+          }
+          dl "${{ inputs.w14_bundle_run_id }}" "w14-w14b-*" pool/wins/w14b
+          dl "${{ inputs.w15_run_id }}"        "w15-w15a-*" pool/w15a_raw
+          dl "${{ inputs.w15_run_id }}"        "w15-w15b-*" pool/wins/w15b
+          dl "${{ inputs.w16_run_id }}"        "w16-s-*"    pool/wins/w16
+
+          mkdir -p pool/wins/w15a pool/gadgets/w15a
+          find pool/w15a_raw -name "w15a_escape_*.npz" -exec cp {} pool/wins/w15a/ \;
+          find pool/w15a_raw -name "g15_*.npz"         -exec cp {} pool/gadgets/w15a/ \;
+          rm -rf pool/w15a_raw
+
+          # Copy recent R12/R13 winning NPZs into pool/recent for W17B prioritization
+          find pool/wins/w14b pool/wins/w15a pool/wins/w15b pool/wins/w16 -name "*.npz" -exec cp {} pool/recent/ \;
+
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          echo "Recent NPZs: $(find pool/recent -name '*.npz' | wc -l)"
+          tar -cf megapool_7wave.tar pool
+          ls -lh megapool_7wave.tar
+
+      - name: Upload single consolidated 7-wave Mega-Pool archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_7wave.tar
+          retention-days: 7
+
+  wave17a_global_peel_stretch_del:
+    needs: consolidate_pool_w17
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated 7-wave Mega-Pool archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+
+      - name: Run Wave 17A Global All-580 Peel+Stretch+Del Shard (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_7wave.tar
+          mkdir -p "artifacts/w17a_${SHARD_ID}" /tmp/sq_w17_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v4.npz" /tmp/sq_w17_ds/pub_base_v4.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w17_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w17_ds/
+          export SQ_DS_DIR="/tmp/sq_w17_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          python3 -u squares_math/workers/w17a_global_peel_stretch_del.py \
+            --union-npz /tmp/sq_w17_ds/pub_base_v4.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --lags-json /tmp/sq_w17_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 3550 \
+            --out-npz "artifacts/w17a_${SHARD_ID}/w17a_peel_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w17a_${SHARD_ID}"
+
+      - name: Upload Wave 17A Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w17a-${{ matrix.shard }}
+          path: artifacts/w17a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave17b_deep_escape_all560:
+    needs: consolidate_pool_w17
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated 7-wave Mega-Pool archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+
+      - name: Run Wave 17B Untouched-300 + Small-N + Fresh-Winners Deep-Escape Melt Shard (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_7wave.tar
+          mkdir -p "artifacts/w17b_${SHARD_ID}" /tmp/sq_w17_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v4.npz" /tmp/sq_w17_ds/pub_base_v4.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w17_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w17_ds/
+          export SQ_DS_DIR="/tmp/sq_w17_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          python3 -u squares_math/workers/w17b_deep_escape_all560.py \
+            --union-npz /tmp/sq_w17_ds/pub_base_v4.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --recent-glob "pool/recent/*.npz" \
+            --lags-json /tmp/sq_w17_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 3550 \
+            --out-npz "artifacts/w17b_${SHARD_ID}/w17b_escape_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w17b_${SHARD_ID}"
+
+      - name: Upload Wave 17B Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w17b-${{ matrix.shard }}
+          path: artifacts/w17b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave17c_consolidate_for_dp:
+    needs: [wave17a_global_peel_stretch_del, wave17b_deep_escape_all560]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Pack W17A + W17B wins into single archive (0 rate limit for W17C!)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.run_tag }}-w17[ab]-*
+          path: w17ab_out
+      - run: |
+          echo "W17A+B NPZs: $(find w17ab_out -name '*.npz' | wc -l)"
+          tar -cf w17ab_wins.tar w17ab_out
+          ls -lh w17ab_wins.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-w17ab-bundle
+          path: w17ab_wins.tar
+          retention-days: 7
+
+  wave17c_grand_8wave_dp:
+    needs: wave17c_consolidate_for_dp
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download 2 single archives (2 API calls total!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-w17ab-bundle
+          path: .
+
+      - name: Run Wave 17C Grand 8-Wave Full-Frontier Mega-Pool 4D-DP + Deep Seam-fq + Contact LP
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_7wave.tar
+          tar -xf w17ab_wins.tar
+          mkdir -p "artifacts/w17c_${SHARD_ID}" /tmp/sq_w17_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v4.npz" /tmp/sq_w17_ds/pub_base_v4.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w17_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w17_ds/
+          export SQ_DS_DIR="/tmp/sq_w17_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w17_ds/pub_base_v4.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --win-glob "w17ab_out/**/*.npz" \
+            --gadget-glob "pool/gadgets/w6a/**/gadgets_s*.npz" \
+            --gadget-glob "pool/gadgets/w7a/**/g7_*.npz" \
+            --gadget-glob "pool/gadgets/w8a/**/g8_*.npz" \
+            --gadget-glob "pool/gadgets/w9a/**/g9_*.npz" \
+            --gadget-glob "pool/gadgets/w10a/**/g10_*.npz" \
+            --gadget-glob "pool/gadgets/w13a/**/g13_*.npz" \
+            --gadget-glob "pool/gadgets/w15a/**/g15_*.npz" \
+            --lags-json /tmp/sq_w17_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w17c_${SHARD_ID}/w17c_megapool_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w17c_${SHARD_ID}"
+
+      - name: Upload Wave 17C Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w17c-${{ matrix.shard }}
+          path: artifacts/w17c_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
