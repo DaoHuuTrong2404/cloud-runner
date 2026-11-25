@@ -1,0 +1,151 @@
+name: Squares Math Wave 14 Grand Unified 6-Wave Full-Frontier Mega-Pool 4D-DP (Single Consolidator -> 0 API Rate Limit)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w14"
+        type: string
+      w6_run_id:
+        required: false
+        default: "45432243265"
+        type: string
+      w7_run_id:
+        required: false
+        default: "45445028521"
+        type: string
+      w8_run_id:
+        required: false
+        default: "45455826211"
+        type: string
+      w9_run_id:
+        required: false
+        default: "45474409055"
+        type: string
+      w10_run_id:
+        required: false
+        default: "45487524096"
+        type: string
+      w11_run_id:
+        required: false
+        default: "45495981866"
+        type: string
+      w12_run_id:
+        required: false
+        default: "45506418472"
+        type: string
+      w13_run_id:
+        required: false
+        default: "45506716720"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_pool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download all 6 gadget waves & 7 winning packing waves ONCE (1 runner = 0 rate limit!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p pool/gadgets pool/wins
+          dl() {
+            local rid="$1" pat="$2" dst="$3"
+            mkdir -p "$dst"
+            gh run download "$rid" --repo DaoHuuTrong2404/cloud-runner -p "$pat" -D "$dst" || true
+          }
+          dl "${{ inputs.w6_run_id }}"  "w6a-w6a-*"   pool/gadgets/w6a
+          dl "${{ inputs.w7_run_id }}"  "w7a-w7a-*"   pool/gadgets/w7a
+          dl "${{ inputs.w8_run_id }}"  "w8a-w8a-*"   pool/gadgets/w8a
+          dl "${{ inputs.w9_run_id }}"  "w9a-w9a-*"   pool/gadgets/w9a
+          dl "${{ inputs.w10_run_id }}" "w10a-w10a-*" pool/gadgets/w10a
+          dl "${{ inputs.w13_run_id }}" "w13-w13a-*"  pool/gadgets/w13a
+
+          dl "${{ inputs.w6_run_id }}"  "w6a-w6b-*"   pool/wins/w6b
+          dl "${{ inputs.w7_run_id }}"  "w7a-w7b-*"   pool/wins/w7b
+          dl "${{ inputs.w8_run_id }}"  "w8a-w8b-*"   pool/wins/w8b
+          dl "${{ inputs.w9_run_id }}"  "w9a-w9b-*"   pool/wins/w9b
+          dl "${{ inputs.w10_run_id }}" "w10a-w10b-*" pool/wins/w10b
+          dl "${{ inputs.w11_run_id }}" "w11-s-*"     pool/wins/w11
+          dl "${{ inputs.w12_run_id }}" "w12-w12a-*"  pool/wins/w12a
+
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_6wave.tar pool
+          ls -lh megapool_6wave.tar
+
+      - name: Upload single consolidated Mega-Pool archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_6wave.tar
+          retention-days: 7
+
+  wave14b_grand_6wave_dp:
+    needs: consolidate_pool
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated Mega-Pool archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+
+      - name: Run Wave 14B Grand 6-Wave Full-Frontier 10-Bucket 4D-DP + Deep Seam-fq + Contact LP
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_6wave.tar
+          mkdir -p "artifacts/w14b_${SHARD_ID}" /tmp/sq_w14_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v3.npz" /tmp/sq_w14_ds/pub_base_v3.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w14_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w14_ds/
+          export SQ_DS_DIR="/tmp/sq_w14_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w14_ds/pub_base_v3.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --gadget-glob "pool/gadgets/w6a/**/gadgets_s*.npz" \
+            --gadget-glob "pool/gadgets/w7a/**/g7_*.npz" \
+            --gadget-glob "pool/gadgets/w8a/**/g8_*.npz" \
+            --gadget-glob "pool/gadgets/w9a/**/g9_*.npz" \
+            --gadget-glob "pool/gadgets/w10a/**/g10_*.npz" \
+            --gadget-glob "pool/gadgets/w13a/**/g13_*.npz" \
+            --lags-json /tmp/sq_w14_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w14b_${SHARD_ID}/w14b_megapool_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w14b_${SHARD_ID}"
+
+      - name: Upload Wave 14B Grand Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w14b-${{ matrix.shard }}
+          path: artifacts/w14b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
