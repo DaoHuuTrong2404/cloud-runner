@@ -1,4 +1,4 @@
-name: Squares Math Wave 16 Top-20 Biggest-Gap Global Topology Sniper (80 Free Cores: 1 Dedicated 4-Core Runner Per Puzzle!)
+name: "Squares Math Wave 16 Top-20 Biggest-Gap Global Topology Sniper (80 Free Cores)"
 
 on:
   workflow_dispatch:
