@@ -1,0 +1,148 @@
+name: "Squares Math Wave 23 Anomalies #61-130 + Phase-Winner Re-Snipe + Fresh Phase-Transition Gadget Surgery (80 Free Cores)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w23"
+        type: string
+      w21_run_id:
+        required: false
+        default: "45556346435"
+        type: string
+      w22_run_id:
+        required: false
+        default: "45559274422"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_pool_w23:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Consolidate W22 megapool + ALL finished W21A phase wins + early W22 wins ONCE
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w22_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w22-megapool-bundle" -D .
+          tar -xf megapool_w22.tar
+          rm -f megapool_w22.tar
+          mkdir -p pool/wins/w21a pool/wins/w22_early
+          gh run download "${{ inputs.w21_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w21-w21a-*" -D pool/wins/w21a || true
+          gh run download "${{ inputs.w22_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w22-s-*"    -D pool/wins/w22_early || true
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w23.tar pool
+          ls -lh megapool_w23.tar
+
+      - name: Upload single consolidated W23 archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w23.tar
+          retention-days: 7
+
+  wave23_dual_assault:
+    needs: consolidate_pool_w23
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated W23 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+
+      - name: Run Wave 23 Shard (0..9 Anomalies #61-130 + Phase-Winner Re-Snipe, 10..14 Bottleneck-Shrink, 15..19 Bottleneck-Grow)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w23.tar
+          mkdir -p "artifacts/w23_${SHARD_ID}" /tmp/sq_w23_ds /tmp/sq_bins
+          if [ "$SHARD_ID" -le 14 ]; then
+            (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          else
+            (cd squares_math/fq_crate && cargo build --release --bin fq)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          fi
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w23_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w23_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w23_ds/
+          export SQ_DS_DIR="/tmp/sq_w23_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          if [ "$SHARD_ID" -le 9 ]; then
+            python3 -u squares_math/workers/w22_convexity_anomaly_sniper.py \
+              --union-npz /tmp/sq_w23_ds/pub_base_v5.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --extra-n "499,746,683,264,593,642,654,692,500,932,929,419,730,626,988,545,421,927,935,862" \
+              --rank-start 60 --rank-end 130 \
+              --shard "$SHARD_ID" --num-shards 10 --procs 4 --budget-sec 3500 \
+              --out-npz "artifacts/w23_${SHARD_ID}/w23a_anom2_s${SHARD_ID}.npz"
+          elif [ "$SHARD_ID" -le 14 ]; then
+            SUB=$((SHARD_ID - 10))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w23_ds/pub_base_v5.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --prev-glob "pool/gadgets/w6a/**/gadgets_s*.npz" \
+              --prev-glob "pool/gadgets/w7a/**/g7_*.npz" \
+              --prev-glob "pool/gadgets/w8a/**/g8_*.npz" \
+              --prev-glob "pool/gadgets/w9a/**/g9_*.npz" \
+              --prev-glob "pool/gadgets/w10a/**/g10_*.npz" \
+              --prev-glob "pool/gadgets/w13a/**/g13_*.npz" \
+              --prev-glob "pool/gadgets/w15a/**/g15_*.npz" \
+              --prev-glob "pool/gadgets/w18a/**/g18_*.npz" \
+              --lags-json /tmp/sq_w23_ds/lag_targets.json \
+              --mode bottleneck_shrink --shard "$SUB" --num-shards 5 --procs 4 --budget-sec 3400 \
+              --out-npz "artifacts/w23_${SHARD_ID}/g23_bn_shrink_s${SUB}.npz"
+          else
+            SUB=$((SHARD_ID - 15))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w23_ds/pub_base_v5.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --prev-glob "pool/gadgets/w6a/**/gadgets_s*.npz" \
+              --prev-glob "pool/gadgets/w7a/**/g7_*.npz" \
+              --prev-glob "pool/gadgets/w8a/**/g8_*.npz" \
+              --prev-glob "pool/gadgets/w9a/**/g9_*.npz" \
+              --prev-glob "pool/gadgets/w10a/**/g10_*.npz" \
+              --prev-glob "pool/gadgets/w13a/**/g13_*.npz" \
+              --prev-glob "pool/gadgets/w15a/**/g15_*.npz" \
+              --prev-glob "pool/gadgets/w18a/**/g18_*.npz" \
+              --lags-json /tmp/sq_w23_ds/lag_targets.json \
+              --mode bottleneck_grow --shard "$SUB" --num-shards 5 --procs 4 --budget-sec 3400 \
+              --out-npz "artifacts/w23_${SHARD_ID}/g23_bn_grow_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w23_${SHARD_ID}"
+
+      - name: Upload Wave 23 Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-s-${{ matrix.shard }}
+          path: artifacts/w23_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7

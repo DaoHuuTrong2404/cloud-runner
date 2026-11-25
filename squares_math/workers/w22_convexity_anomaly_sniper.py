@@ -41,7 +41,7 @@ import stretch as st_mod
 ANNEAL_BIN = os.environ.get("ANNEAL_BIN", "/tmp/sq_bins/anneal")
 
 
-def detect_convexity_anomalies(cur, top_k=60):
+def detect_convexity_anomalies(cur, rank_start=0, rank_end=60):
     """Rank n >= 220 non-grid packings by Fixed-D convexity bump (f(K,D) above neighbors) / sqrt(n)."""
     f = {n: cur[n][0] - math.isqrt(n) for n in range(1, 1001)}
     anoms = []
@@ -62,10 +62,10 @@ def detect_convexity_anomalies(cur, top_k=60):
             bD = f[n] - 0.5 * (f[n_prev] + f[n_next])
         elif D < 2 * (K - 1) + 1 and f[n_prev] < 1.0 - 1e-6:
             bD = f[n] - (f[n_prev] - 0.011)
-        if bD > 0.0015:
+        if bD > 0.0010:
             anoms.append((bD / math.sqrt(n), bD, n))
     anoms.sort(reverse=True)
-    return [(n, bD) for _, bD, n in anoms[:top_k]]
+    return [(n, bD) for _, bD, n in anoms[rank_start:rank_end]]
 
 
 def harvest_fixed_d_transfers(n, L0, cur, nongrid_sorted):
@@ -349,6 +349,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--union-npz", required=True)
     ap.add_argument("--win-glob", action="append", default=[])
+    ap.add_argument("--extra-n", default="")
+    ap.add_argument("--rank-start", type=int, default=0)
+    ap.add_argument("--rank-end", type=int, default=60)
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--num-shards", type=int, default=10)
     ap.add_argument("--procs", type=int, default=4)
@@ -365,8 +368,21 @@ def main():
         for m in range(20, 1001)
         if m != math.isqrt(m) ** 2 and cur[m][0] < math.isqrt(m) + 1 - 1e-6
     ]
-    top60 = detect_convexity_anomalies(cur, top_k=60)
-    my_slice = top60[args.shard :: args.num_shards]
+    targets_list = []
+    seen_n = set()
+    if args.extra_n.strip():
+        for tok in args.extra_n.split(","):
+            tok = tok.strip()
+            if tok.isdigit():
+                en = int(tok)
+                if en not in seen_n:
+                    seen_n.add(en)
+                    targets_list.append((en, 0.010))
+    for n, bD in detect_convexity_anomalies(cur, rank_start=args.rank_start, rank_end=args.rank_end):
+        if n not in seen_n:
+            seen_n.add(n)
+            targets_list.append((n, bD))
+    my_slice = targets_list[args.shard :: args.num_shards]
     print(
         f"[W22-ConvexitySniper s={args.shard}/{args.num_shards}] Frontier={tot_score:.10f} "
         f"({len(fresh)} fresh from {n_files} files), my_targets={[(n, round(b, 4)) for n, b in my_slice]} ({time.time() - t0:.1f}s)",
