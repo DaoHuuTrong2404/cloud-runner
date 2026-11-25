@@ -1,0 +1,183 @@
+name: "Squares Math Wave 24 Grand Finale (12 Grand 11-Wave 4D-DP w/ g23 + 18 High-f Phase-Transition Sniper = 120 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w24"
+        type: string
+      w21_run_id:
+        required: false
+        default: "45556346435"
+        type: string
+      w22_run_id:
+        required: false
+        default: "45559274422"
+        type: string
+      w23_run_id:
+        required: false
+        default: "45564734049"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_pool_w24:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Consolidate W23 megapool + ALL W21C + ALL W22 + ALL fresh g23 gadgets ONCE (0 rate limit!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w23_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w23-megapool-bundle" -D .
+          tar -xf megapool_w23.tar
+          rm -f megapool_w23.tar
+          mkdir -p pool/wins/w21c pool/wins/w22_all pool/wins/w23a pool/gadgets/w23
+          gh run download "${{ inputs.w21_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w21-w21c-*" -D pool/wins/w21c    || true
+          gh run download "${{ inputs.w22_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w22-s-*"    -D pool/wins/w22_all || true
+          gh run download "${{ inputs.w23_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w23-s-*"    -D pool/w23_raw      || true
+          find pool/w23_raw -name "w23a_*.npz" -exec cp {} pool/wins/w23a/ \;
+          find pool/w23_raw -name "g23_*.npz"  -exec cp {} pool/gadgets/w23/ \;
+          rm -rf pool/w23_raw
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w24.tar pool
+          ls -lh megapool_w24.tar
+
+      - name: Upload single consolidated W24 archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w24.tar
+          retention-days: 7
+
+  wave24a_grand_11wave_dp:
+    needs: consolidate_pool_w24
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated W24 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+
+      - name: Run Wave 24A Grand 11-Wave Full-Frontier Mega-Pool 4D-DP (absorbing fresh g23 phase-transition gadgets!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w24.tar
+          mkdir -p "artifacts/w24a_${SHARD_ID}" /tmp/sq_w24_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w24_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w24_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w24_ds/
+          export SQ_DS_DIR="/tmp/sq_w24_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w24_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --gadget-glob "pool/gadgets/w6a/**/gadgets_s*.npz" \
+            --gadget-glob "pool/gadgets/w7a/**/g7_*.npz" \
+            --gadget-glob "pool/gadgets/w8a/**/g8_*.npz" \
+            --gadget-glob "pool/gadgets/w9a/**/g9_*.npz" \
+            --gadget-glob "pool/gadgets/w10a/**/g10_*.npz" \
+            --gadget-glob "pool/gadgets/w13a/**/g13_*.npz" \
+            --gadget-glob "pool/gadgets/w15a/**/g15_*.npz" \
+            --gadget-glob "pool/gadgets/w18a/**/g18_*.npz" \
+            --gadget-glob "pool/gadgets/w23/**/g23_*.npz" \
+            --lags-json /tmp/sq_w24_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w24a_${SHARD_ID}/w24a_megapool_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w24a_${SHARD_ID}"
+
+      - name: Upload Wave 24A Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w24a-${{ matrix.shard }}
+          path: artifacts/w24a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave24b_high_f_phase_assault:
+    needs: consolidate_pool_w24
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+
+      - name: Download SINGLE consolidated W24 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+
+      - name: Run Wave 24B High-f (0.76..0.998) Phase-Transition Sniper Shard (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w24.tar
+          mkdir -p "artifacts/w24b_${SHARD_ID}" /tmp/sq_w24_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w24_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w24_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w24_ds/
+          export SQ_DS_DIR="/tmp/sq_w24_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          python3 -u squares_math/workers/w24b_high_f_phase_assault.py \
+            --union-npz /tmp/sq_w24_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --lags-json /tmp/sq_w24_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 18 --procs 4 --budget-sec 3500 \
+            --out-npz "artifacts/w24b_${SHARD_ID}/w24b_highf_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w24b_${SHARD_ID}"
+
+      - name: Upload Wave 24B Wins
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w24b-${{ matrix.shard }}
+          path: artifacts/w24b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
