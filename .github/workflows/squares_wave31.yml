@@ -1,0 +1,242 @@
+name: "Squares Math Wave 31 SLP Contact Polish + Exhaustive 260-Sq n+1/n+2 Removal + Cross-Scale Stretch/k^2+1/Grid-Break + LNS Band-Reseed (160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w31"
+        type: string
+      w30_run_id:
+        required: false
+        default: "45746812776"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_r23_base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W30 megapool + ALL W30A/B/C wins ONCE (0 rate limit!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w30_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w30-megapool-bundle" -D .
+          tar -xf megapool_w30.tar
+          rm -f megapool_w30.tar
+          mkdir -p pool/wins/w30a pool/wins/w30b pool/wins/w30c
+          gh run download "${{ inputs.w30_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w30-w30a-*" -D pool/wins/w30a || true
+          gh run download "${{ inputs.w30_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w30-w30b-*" -D pool/wins/w30b || true
+          gh run download "${{ inputs.w30_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w30-w30c-*" -D pool/wins/w30c || true
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w31.tar pool
+          ls -lh megapool_w31.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w31.tar
+          retention-days: 7
+
+  wave31a_slp_polish_all:
+    needs: consolidate_r23_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 31A-Polish Trust-Region Contact SLP + HopperV2 Cascade (all 560+ non-grid)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w31.tar
+          mkdir -p "artifacts/w31a_pol_${SHARD_ID}" /tmp/sq_w31_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w31_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w31_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w31_ds/
+          export SQ_DS_DIR="/tmp/sq_w31_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w31a_slp_polish_and_exh_remove.py \
+            --mode polish_all \
+            --union-npz /tmp/sq_w31_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w31_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2800 \
+            --slp-sec 35 --hop-sec 130 \
+            --out-npz "artifacts/w31a_pol_${SHARD_ID}/w31a_pol_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w31a_pol_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w31a-pol-${{ matrix.shard }}
+          path: artifacts/w31a_pol_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave31a_exh_remove:
+    needs: consolidate_r23_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 31A-ExhRemove 260-Sq n+1 & n+2 Removal -> SLP -> HopperV2 -> SLP (Top-144 gaps)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w31.tar
+          mkdir -p "artifacts/w31a_rem_${SHARD_ID}" /tmp/sq_w31_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w31_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w31_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w31_ds/
+          export SQ_DS_DIR="/tmp/sq_w31_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w31a_slp_polish_and_exh_remove.py \
+            --mode exh_remove \
+            --union-npz /tmp/sq_w31_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w31_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 --budget-sec 2800 \
+            --slp-sec 28 --hop-sec 145 --min-rank 0 --max-targets 144 \
+            --out-npz "artifacts/w31a_rem_${SHARD_ID}/w31a_rem_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w31a_rem_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w31a-rem-${{ matrix.shard }}
+          path: artifacts/w31a_rem_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave31b_cross_scale_k2p1:
+    needs: consolidate_r23_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 31B Cross-Scale Arm Stretcher + Window Crop + k^2+1 Sub-0.50 + Grid-Break
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w31.tar
+          mkdir -p "artifacts/w31b_${SHARD_ID}" /tmp/sq_w31_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w31_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w31_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w31_ds/
+          export SQ_DS_DIR="/tmp/sq_w31_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w31b_stretch_crop_and_k2p1.py \
+            --union-npz /tmp/sq_w31_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w31_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 10 --procs 4 --budget-sec 2800 \
+            --hop-sec 140 --slp-sec 28 --max-targets 120 \
+            --out-npz "artifacts/w31b_${SHARD_ID}/w31b_cs_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w31b_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w31b-${{ matrix.shard }}
+          path: artifacts/w31b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave31c_lns_band_reseed:
+    needs: consolidate_r23_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 31C Numba L-BFGS LNS Band-Reseed + Angle-Waves + Pin-Rotate -> HopperV2 + SLP
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w31.tar
+          mkdir -p "artifacts/w31c_${SHARD_ID}" /tmp/sq_w31_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w31_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w31_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w31_ds/
+          export SQ_DS_DIR="/tmp/sq_w31_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w31c_lns_band_reseed_hopper.py \
+            --union-npz /tmp/sq_w31_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w31_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 10 --procs 4 --budget-sec 2800 \
+            --lns-sec 170 --hop-sec 130 --slp-sec 25 --min-rank 0 --max-targets 100 \
+            --out-npz "artifacts/w31c_${SHARD_ID}/w31c_lns_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w31c_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w31c-${{ matrix.shard }}
+          path: artifacts/w31c_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
