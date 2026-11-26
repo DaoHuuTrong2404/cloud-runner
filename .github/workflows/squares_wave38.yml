@@ -1,0 +1,274 @@
+name: "Squares Math Wave 38 TURBO 2.5x: 1-Time 18-Bucket Numba DP Cache + 40c 19W-DP + 40c Hopper Gadget Surgery + 40c FQ Factory + 40c Topology Transporter (160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w38"
+        type: string
+      w37_run_id:
+        required: false
+        default: "45809228729"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w38_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy numba
+      - name: Consolidate W37 megapool + W37A/D wins + g37_hop + g37_fq AND Precompute 18-bucket Numba 4D-DP Cache ONCE!
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w37_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w37-megapool-bundle" -D .
+          tar -xf megapool_w37.tar
+          rm -f megapool_w37.tar
+          mkdir -p pool/wins/w37a pool/wins/w37d pool/gadgets/g37_hop pool/gadgets/g37_fq /tmp/sq_w38_ds
+          gh run download "${{ inputs.w37_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w37-w37a-*" -D pool/wins/w37a || true
+          gh run download "${{ inputs.w37_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w37-w37d-*" -D pool/wins/w37d || true
+          gh run download "${{ inputs.w37_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w37-w37b-*" -D pool/gadgets/g37_hop || true
+          gh run download "${{ inputs.w37_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w37-w37c-*" -D pool/gadgets/g37_fq || true
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          rm -f pool/dp_cache.npz
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w38_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w38_ds/
+          export SQ_DS_DIR="/tmp/sq_w38_ds"
+          python3 -u squares_math/workers/precompute_dp_cache.py \
+            --union-npz /tmp/sq_w38_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --gadget-glob "pool/gadgets/**/*.npz" \
+            --procs 4 --fmax 0.992 \
+            --out-cache pool/dp_cache.npz
+          ls -lh pool/dp_cache.npz
+          tar -cf megapool_w38.tar pool
+          ls -lh megapool_w38.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w38.tar
+          retention-days: 7
+
+  wave38a_grand_19wave_dp:
+    needs: consolidate_w38_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 38A 40-Core TURBO 18-Bucket 19-Wave 4D-DP (0s Startup from dp_cache.npz!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w38.tar
+          mkdir -p "artifacts/w38a_${SHARD_ID}" /tmp/sq_w38_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w38_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w38_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w38_ds/
+          export SQ_DS_DIR="/tmp/sq_w38_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w38_ds/pub_base_v5.npz \
+            --dp-cache pool/dp_cache.npz \
+            --lags-json /tmp/sq_w38_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 10 --procs 4 --budget-sec 2800 --seed-off 380000 \
+            --out-npz "artifacts/w38a_${SHARD_ID}/w38a_19wdp18_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w38a_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w38a-${{ matrix.shard }}
+          path: artifacts/w38a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave38b_hopper_gadget_surgery:
+    needs: consolidate_w38_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 38B 40-Core TURBO Hopper Gadget Surgery (0s DP Startup -> 2.7x More Gadgets! M=7..30, f>=0.45)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w38.tar
+          mkdir -p "artifacts/w38b_${SHARD_ID}" /tmp/sq_w38_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w38_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w38_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w38_ds/
+          export SQ_DS_DIR="/tmp/sq_w38_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w36b_hopper_gadget_surgery.py \
+            --union-npz /tmp/sq_w38_ds/pub_base_v5.npz \
+            --dp-cache pool/dp_cache.npz \
+            --lags-json /tmp/sq_w38_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 10 --procs 4 --budget-sec 2700 --hop-sec 70 --seed-off 380000 \
+            --out-npz "artifacts/w38b_${SHARD_ID}/g38_hop_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w38b_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w38b-${{ matrix.shard }}
+          path: artifacts/w38b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave38c_g38_fq_bottleneck_factory:
+    needs: consolidate_w38_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 38C 40-Core TURBO Live-Weighted g38 FQ Factory (0s DP Startup! 0..5 shrink, 6..9 grow)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w38.tar
+          mkdir -p "artifacts/w38c_${SHARD_ID}" /tmp/sq_w38_ds /tmp/sq_bins
+          if [ "$SHARD_ID" -le 5 ]; then
+            (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          else
+            (cd squares_math/fq_crate && cargo build --release --bin fq)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          fi
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w38_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w38_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w38_ds/
+          export SQ_DS_DIR="/tmp/sq_w38_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          if [ "$SHARD_ID" -le 5 ]; then
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w38_ds/pub_base_v5.npz \
+              --dp-cache pool/dp_cache.npz \
+              --lags-json /tmp/sq_w38_ds/lag_targets.json \
+              --mode bottleneck_shrink --shard "$SHARD_ID" --num-shards 6 --procs 4 --budget-sec 2750 --seed-off 38000 \
+              --out-npz "artifacts/w38c_${SHARD_ID}/g38_bn_shrink_s${SHARD_ID}.npz"
+          else
+            SUB=$((SHARD_ID - 6))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w38_ds/pub_base_v5.npz \
+              --dp-cache pool/dp_cache.npz \
+              --lags-json /tmp/sq_w38_ds/lag_targets.json \
+              --mode bottleneck_grow --shard "$SUB" --num-shards 4 --procs 4 --budget-sec 2750 --seed-off 38000 \
+              --out-npz "artifacts/w38c_${SHARD_ID}/g38_bn_grow_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w38c_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w38c-${{ matrix.shard }}
+          path: artifacts/w38c_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave38d_topology_transporter:
+    needs: consolidate_w38_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 38D 40-Core Topology Transporter (n-1 Insert + n+1/n+2 Band-Relax + Ribbon Splice on Top-100 Gaps!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w38.tar
+          mkdir -p "artifacts/w38d_${SHARD_ID}" /tmp/sq_w38_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w38_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w38_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w38_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w38_ds/
+          export SQ_DS_DIR="/tmp/sq_w38_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w38e_topology_transporter.py \
+            --union-npz /tmp/sq_w38_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w38_ds/frontier_targets_public.json \
+            --lags-json /tmp/sq_w38_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 10 --procs 4 --budget-sec 2600 --hop-sec 100 \
+            --seed-off 380000 --max-targets 100 \
+            --out-npz "artifacts/w38d_${SHARD_ID}/w38d_topo_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w38d_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w38d-${{ matrix.shard }}
+          path: artifacts/w38d_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7

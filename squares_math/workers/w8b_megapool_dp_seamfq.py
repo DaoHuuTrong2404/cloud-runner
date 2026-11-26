@@ -312,7 +312,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--union-npz", required=True)
     ap.add_argument("--win-glob", action="append", default=[])
-    ap.add_argument("--gadget-glob", action="append", required=True)
+    ap.add_argument("--gadget-glob", action="append", default=[])
+    ap.add_argument("--dp-cache", default="")
     ap.add_argument("--lags-json", required=True)
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--num-shards", type=int, default=12)
@@ -323,80 +324,98 @@ def main():
     args = ap.parse_args()
 
     t0 = time.time()
-    d = np.load(args.union_npz)
-    x, y, t, L = d["x"], d["y"], d["t"], d["L"]
-    offs = [0]
-    for n in range(1, 1001):
-        offs.append(offs[-1] + n)
+    if args.dp_cache and os.path.exists(args.dp_cache):
+        import precompute_dp_cache as pc
 
-    donors = []
-    cur = {}
-    for n in range(1, 1001):
-        s0, e0 = offs[n - 1], offs[n]
-        sq = np.column_stack([x[s0:e0], y[s0:e0], t[s0:e0]])
-        cur[n] = (float(L[n - 1]), sq)
-
-    # Optionally merge prior winning packings so cur[n] is up-to-date AND fresh whole-packing winners become new 2D donors!
-    n_win_updated = 0
-    for pat in args.win_glob:
-        for wf in sorted(glob.glob(pat, recursive=True)):
-            try:
-                wd = np.load(wf)
-            except Exception:
-                continue
-            for k in wd.files:
-                if k.startswith("x_"):
-                    n = int(k[2:])
-                    arr = np.column_stack(
-                        [wd[f"x_{n}"], wd[f"y_{n}"], wd[f"t_{n}"]]
-                    ).astype(np.float64)
-                    if len(arr) != n:
-                        continue
-                    if float(np.max(np.abs(arr[:, 2]))) > 2.0:
-                        arr[:, 2] = np.radians(arr[:, 2])
-                    Ln = span(arr)
-                    if Ln < cur[n][0] - 1e-8:
-                        cur[n] = (Ln, arr)
-                        n_win_updated += 1
-    for n in range(1, 1001):
-        if cur[n][0] < math.ceil(math.sqrt(n)) - 1e-7:
-            donors.append(cur[n][1])
-    if n_win_updated:
+        cache = pc.load_dp_cache(args.dp_cache)
+        cur, donors = cache["cur"], cache["donors"]
+        G, dp, PG, PM, PQ = (
+            cache["G"],
+            cache["dp"],
+            cache["PG"],
+            cache["PM"],
+            cache["PQ"],
+        )
         print(
-            f"[W8B Shard {args.shard}] Updated {n_win_updated} frontier packings from --win-glob (score={sum(cur[n][0] / math.sqrt(n) - 1.0 for n in range(1, 1001)):.10f})",
+            f"[W8B Shard {args.shard}/{args.num_shards}] INSTANT dp_cache loaded: {len(donors)} active donors, "
+            f"G={len(G)} ({len(f2d.THR)}-bucket), frontier={sum(cur[n][0] / math.sqrt(n) - 1.0 for n in range(1, 1001)):.10f} ({time.time() - t0:.2f}s)",
+            flush=True,
+        )
+    else:
+        d = np.load(args.union_npz)
+        x, y, t, L = d["x"], d["y"], d["t"], d["L"]
+        offs = [0]
+        for n in range(1, 1001):
+            offs.append(offs[-1] + n)
+
+        donors = []
+        cur = {}
+        for n in range(1, 1001):
+            s0, e0 = offs[n - 1], offs[n]
+            sq = np.column_stack([x[s0:e0], y[s0:e0], t[s0:e0]])
+            cur[n] = (float(L[n - 1]), sq)
+
+        # Optionally merge prior winning packings so cur[n] is up-to-date AND fresh whole-packing winners become new 2D donors!
+        n_win_updated = 0
+        for pat in args.win_glob:
+            for wf in sorted(glob.glob(pat, recursive=True)):
+                try:
+                    wd = np.load(wf)
+                except Exception:
+                    continue
+                for k in wd.files:
+                    if k.startswith("x_"):
+                        n = int(k[2:])
+                        arr = np.column_stack(
+                            [wd[f"x_{n}"], wd[f"y_{n}"], wd[f"t_{n}"]]
+                        ).astype(np.float64)
+                        if len(arr) != n:
+                            continue
+                        if float(np.max(np.abs(arr[:, 2]))) > 2.0:
+                            arr[:, 2] = np.radians(arr[:, 2])
+                        Ln = span(arr)
+                        if Ln < cur[n][0] - 1e-8:
+                            cur[n] = (Ln, arr)
+                            n_win_updated += 1
+        for n in range(1, 1001):
+            if cur[n][0] < math.ceil(math.sqrt(n)) - 1e-7:
+                donors.append(cur[n][1])
+        if n_win_updated:
+            print(
+                f"[W8B Shard {args.shard}] Updated {n_win_updated} frontier packings from --win-glob (score={sum(cur[n][0] / math.sqrt(n) - 1.0 for n in range(1, 1001)):.10f})",
+                flush=True,
+            )
+
+        n_pooled = 0
+        n_files = 0
+        seen_sig = {(len(sq), round(cur[n][0], 6)) for n, (_, sq) in cur.items()}
+        for pat in args.gadget_glob:
+            for gf in sorted(glob.glob(pat, recursive=True)):
+                try:
+                    gd = np.load(gf)
+                except Exception:
+                    continue
+                n_files += 1
+                for k in gd.files:
+                    arr = gd[k]
+                    if arr.ndim == 2 and arr.shape[1] == 3 and len(arr) >= 5:
+                        arr64 = arr.astype(np.float64)
+                        sig = (len(arr64), round(f2d.side(arr64), 6))
+                        if sig not in seen_sig:
+                            seen_sig.add(sig)
+                            donors.append(arr64)
+                            n_pooled += 1
+        print(
+            f"[W8B Shard {args.shard}/{args.num_shards}] MEGA-POOL loaded {len(donors)} donors ({n_pooled} shrunk/grown gadgets from {n_files} files, {time.time() - t0:.1f}s)",
             flush=True,
         )
 
-    n_pooled = 0
-    n_files = 0
-    seen_sig = {(len(sq), round(cur[n][0], 6)) for n, (_, sq) in cur.items()}
-    for pat in args.gadget_glob:
-        for gf in sorted(glob.glob(pat, recursive=True)):
-            try:
-                gd = np.load(gf)
-            except Exception:
-                continue
-            n_files += 1
-            for k in gd.files:
-                arr = gd[k]
-                if arr.ndim == 2 and arr.shape[1] == 3 and len(arr) >= 5:
-                    arr64 = arr.astype(np.float64)
-                    sig = (len(arr64), round(f2d.side(arr64), 6))
-                    if sig not in seen_sig:
-                        seen_sig.add(sig)
-                        donors.append(arr64)
-                        n_pooled += 1
-    print(
-        f"[W8B Shard {args.shard}/{args.num_shards}] MEGA-POOL loaded {len(donors)} donors ({n_pooled} shrunk/grown gadgets from {n_files} files, {time.time() - t0:.1f}s)",
-        flush=True,
-    )
-
-    G = f2d.extract_2d_gadgets(donors)
-    dp, PG, PM, PQ = f2d.run_2d_dp(G)
-    print(
-        f"[W8B Shard {args.shard}] 10-bucket Global Pareto 2D gadgets: {len(G)}, 4D DP solved ({time.time() - t0:.1f}s)",
-        flush=True,
-    )
+        G = f2d.extract_2d_gadgets(donors)
+        dp, PG, PM, PQ = f2d.run_2d_dp(G)
+        print(
+            f"[W8B Shard {args.shard}] {len(f2d.THR)}-bucket Global Pareto 2D gadgets: {len(G)}, 4D DP solved ({time.time() - t0:.1f}s)",
+            flush=True,
+        )
 
     lags = json.load(open(args.lags_json)) if os.path.exists(args.lags_json) else []
     lag_set = {int(it["n"]) for it in lags}

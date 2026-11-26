@@ -134,6 +134,7 @@ def main():
     ap.add_argument("--union-npz", required=True)
     ap.add_argument("--win-glob", action="append", default=[])
     ap.add_argument("--prev-glob", action="append", default=[])
+    ap.add_argument("--dp-cache", default="")
     ap.add_argument("--lags-json", required=True)
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--num-shards", type=int, default=8)
@@ -146,11 +147,24 @@ def main():
 
     t0 = time.time()
     w32a.warm_numba()
-    donors, cur_L, n_base, n_prev = w9a.load_pooled_donors(
-        args.union_npz, args.prev_glob, args.win_glob
-    )
-    G = f2d.extract_2d_gadgets(donors)
-    dp, PG, PM, PQ = f2d.run_2d_dp(G)
+    if args.dp_cache and os.path.exists(args.dp_cache):
+        import precompute_dp_cache as pc
+
+        cache = pc.load_dp_cache(args.dp_cache)
+        donors, cur_L = cache["donors"], cache["cur_L"]
+        G, dp, PG, PM, PQ = (
+            cache["G"],
+            cache["dp"],
+            cache["PG"],
+            cache["PM"],
+            cache["PQ"],
+        )
+    else:
+        donors, cur_L, n_base, n_prev = w9a.load_pooled_donors(
+            args.union_npz, args.prev_glob, args.win_glob
+        )
+        G = f2d.extract_2d_gadgets(donors)
+        dp, PG, PM, PQ = f2d.run_2d_dp(G)
 
     lags = json.load(open(args.lags_json)) if os.path.exists(args.lags_json) else []
     lag_wt = {}
@@ -189,13 +203,13 @@ def main():
                 if fg >= f_ch - 0.009:
                     bn_weight[g] = bn_weight.get(g, 0.0) + wt
 
-    # Focus on M in [12..30] gadgets where Stock Hopper shines (tilted bands + loose seam pockets!)
+    # Focus on M in [7..30] gadgets (unlocking K^2+1 sub-0.50 & mid-size high-leverage bottlenecks!)
     ranked = []
     for gi, wt in sorted(bn_weight.items(), key=lambda x: -x[1]):
         w, h, dm = int(G[gi, 0]), int(G[gi, 1]), int(G[gi, 2])
-        if 12 <= max(w, h) <= 30 and float(G[gi, 3]) >= 0.50:
+        if 7 <= max(w, h) <= 30 and float(G[gi, 3]) >= 0.45:
             ranked.append((gi, wt))
-    my_slice = ranked[args.shard :: args.num_shards][:90]
+    my_slice = ranked[args.shard :: args.num_shards][:140]
     jobs = []
     for i, (gi, wt) in enumerate(my_slice):
         w, h, dm, f, _, _, di, si = G[gi]

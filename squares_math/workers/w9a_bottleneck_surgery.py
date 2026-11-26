@@ -535,6 +535,7 @@ def main():
     ap.add_argument("--union-npz", required=True)
     ap.add_argument("--win-glob", action="append", default=[])
     ap.add_argument("--prev-glob", action="append", default=[])
+    ap.add_argument("--dp-cache", default="")
     ap.add_argument("--lags-json", required=True)
     ap.add_argument(
         "--mode",
@@ -550,15 +551,33 @@ def main():
     args = ap.parse_args()
 
     t0 = time.time()
-    donors, cur_L, n_base, n_prev = load_pooled_donors(
-        args.union_npz, args.prev_glob, args.win_glob
-    )
-    G = f2d.extract_2d_gadgets(donors)
-    dp, PG, PM, PQ = f2d.run_2d_dp(G)
-    print(
-        f"[W9A-{args.mode} s={args.shard}/{args.num_shards}] donors={len(donors)} (prev={n_prev}) -> G={len(G)}, 18-bucket 4D-DP solved ({time.time() - t0:.1f}s)",
-        flush=True,
-    )
+    if args.dp_cache and os.path.exists(args.dp_cache):
+        import precompute_dp_cache as pc
+
+        cache = pc.load_dp_cache(args.dp_cache)
+        donors, cur_L = cache["donors"], cache["cur_L"]
+        G, dp, PG, PM, PQ = (
+            cache["G"],
+            cache["dp"],
+            cache["PG"],
+            cache["PM"],
+            cache["PQ"],
+        )
+        print(
+            f"[W9A-{args.mode} s={args.shard}/{args.num_shards}] INSTANT dp_cache loaded: donors={len(donors)}, "
+            f"G={len(G)} ({len(f2d.THR)}-bucket) ({time.time() - t0:.2f}s)",
+            flush=True,
+        )
+    else:
+        donors, cur_L, n_base, n_prev = load_pooled_donors(
+            args.union_npz, args.prev_glob, args.win_glob
+        )
+        G = f2d.extract_2d_gadgets(donors)
+        dp, PG, PM, PQ = f2d.run_2d_dp(G)
+        print(
+            f"[W9A-{args.mode} s={args.shard}/{args.num_shards}] donors={len(donors)} (prev={n_prev}) -> G={len(G)}, {len(f2d.THR)}-bucket 4D-DP solved ({time.time() - t0:.1f}s)",
+            flush=True,
+        )
 
     lags = json.load(open(args.lags_json)) if os.path.exists(args.lags_json) else []
     # Dynamic LIVE gap weights computed against current cur_L[n] (not stale initial Lu!)
