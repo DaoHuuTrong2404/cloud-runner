@@ -1,0 +1,219 @@
+name: "Squares Math Wave 34 Unstoppable Flywheel: Grand 15-Wave 4D-DP (514KB g33 Gadgets!) + 64c g34 Bottleneck Factory + 48c Fast Stock Hopper on 694/502/817/815/451 (160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w34"
+        type: string
+      w33_run_id:
+        required: false
+        default: "45769782825"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w34_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W33 megapool + ALL W33A/C/D wins (n=694 -0.00429!) + ALL 10 W33B fresh g33 bottleneck gadgets (514KB!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w33_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w33-megapool-bundle" -D .
+          tar -xf megapool_w33.tar
+          rm -f megapool_w33.tar
+          mkdir -p pool/wins/w33a pool/wins/w33c pool/wins/w33d pool/gadgets/g33
+          gh run download "${{ inputs.w33_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w33-w33a-*" -D pool/wins/w33a || true
+          gh run download "${{ inputs.w33_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w33-w33c-*" -D pool/wins/w33c || true
+          gh run download "${{ inputs.w33_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w33-w33d-*" -D pool/wins/w33d || true
+          gh run download "${{ inputs.w33_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w33-w33b-*" -D pool/gadgets/g33 || true
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w34.tar pool
+          ls -lh megapool_w34.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w34.tar
+          retention-days: 7
+
+  wave34a_grand_15wave_dp:
+    needs: consolidate_w34_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 34A Grand 15-Wave 4D-DP + Deep Seam-fq + Contact LP (Detonating 514KB g33 Gadgets!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w34.tar
+          mkdir -p "artifacts/w34a_${SHARD_ID}" /tmp/sq_w34_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w34_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w34_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w34_ds/
+          export SQ_DS_DIR="/tmp/sq_w34_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w34_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --gadget-glob "pool/gadgets/**/*.npz" \
+            --lags-json /tmp/sq_w34_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w34a_${SHARD_ID}/w34a_15wdp_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w34a_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w34a-${{ matrix.shard }}
+          path: artifacts/w34a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave34b_g34_mega_bottleneck_factory:
+    needs: consolidate_w34_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 34B 64-Core Mega g34 Bottleneck Factory (0..7 shrink, 8..12 grow, 13..15 pair!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w34.tar
+          mkdir -p "artifacts/w34b_${SHARD_ID}" /tmp/sq_w34_ds /tmp/sq_bins
+          if [ "$SHARD_ID" -le 7 ]; then
+            (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          else
+            (cd squares_math/fq_crate && cargo build --release --bin fq)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          fi
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w34_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w34_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w34_ds/
+          export SQ_DS_DIR="/tmp/sq_w34_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          if [ "$SHARD_ID" -le 7 ]; then
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w34_ds/pub_base_v5.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --prev-glob "pool/gadgets/**/*.npz" \
+              --lags-json /tmp/sq_w34_ds/lag_targets.json \
+              --mode bottleneck_shrink --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2700 \
+              --out-npz "artifacts/w34b_${SHARD_ID}/g34_bn_shrink_s${SHARD_ID}.npz"
+          elif [ "$SHARD_ID" -le 12 ]; then
+            SUB=$((SHARD_ID - 8))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w34_ds/pub_base_v5.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --prev-glob "pool/gadgets/**/*.npz" \
+              --lags-json /tmp/sq_w34_ds/lag_targets.json \
+              --mode bottleneck_grow --shard "$SUB" --num-shards 5 --procs 4 --budget-sec 2700 \
+              --out-npz "artifacts/w34b_${SHARD_ID}/g34_bn_grow_s${SUB}.npz"
+          else
+            SUB=$((SHARD_ID - 13))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w34_ds/pub_base_v5.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --prev-glob "pool/gadgets/**/*.npz" \
+              --lags-json /tmp/sq_w34_ds/lag_targets.json \
+              --mode bottleneck_pair --shard "$SUB" --num-shards 3 --procs 4 --budget-sec 2700 \
+              --out-npz "artifacts/w34b_${SHARD_ID}/g34_bn_pair_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w34b_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w34b-${{ matrix.shard }}
+          path: artifacts/w34b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave34c_fast_stock_hopper:
+    needs: consolidate_w34_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 34C 48-Core Fast Stock Hopper + 180-sq n+1 Removal on 694/693/502/817/815/451 + 144 Gaps
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w34.tar
+          mkdir -p "artifacts/w34c_${SHARD_ID}" /tmp/sq_w34_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w34_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w34_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w34_ds/
+          export SQ_DS_DIR="/tmp/sq_w34_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w32a_fresh_basin_fast_hopper.py \
+            --union-npz /tmp/sq_w34_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w34_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 --budget-sec 2500 \
+            --hop-sec 115 --del-sec 115 --n-seeds 3 --seed-off 340000 --max-targets 144 \
+            --out-npz "artifacts/w34c_${SHARD_ID}/w34c_fh_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w34c_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w34c-${{ matrix.shard }}
+          path: artifacts/w34c_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
