@@ -368,6 +368,17 @@ def main():
                         cur_sq[n] = arr
                         n_win_upd += 1
 
+    # Backward n-1 deletion closure (if L[n] < L[n-1], dropping 1 square yields valid n-1 <= L[n]!)
+    n_bwd = 0
+    for n in range(1000, 1, -1):
+        if cur_L[n] < cur_L[n - 1] - 1e-8:
+            sub = cur_sq[n][:-1].copy()
+            Lsub = f2d.side(sub)
+            if Lsub < cur_L[n - 1] - 1e-8:
+                cur_L[n - 1] = Lsub
+                cur_sq[n - 1] = sub
+                n_bwd += 1
+
     score = sum(float(cur_L[n]) / math.sqrt(n) - 1.0 for n in range(1, 1001))
     donors = []
     seen_sig = set()
