@@ -48,6 +48,7 @@ jobs:
           export SQ_DS_DIR="/tmp/sq_w38_ds"
           python3 -u squares_math/workers/precompute_dp_cache.py \
             --union-npz /tmp/sq_w38_ds/pub_base_v5.npz \
+            --win-glob "squares_math/seeds/pub_v6_v7_public_wins.npz" \
             --win-glob "pool/wins/**/*.npz" \
             --gadget-glob "pool/gadgets/**/*.npz" \
             --procs 4 --fmax 0.992 \
