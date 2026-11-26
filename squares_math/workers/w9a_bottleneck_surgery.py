@@ -639,7 +639,7 @@ def main():
         for gi in range(len(G)):
             if gi not in seen_g and 4 <= max(int(G[gi, 0]), int(G[gi, 1])) <= 28:
                 ranked.append((gi, 1e-9))
-        my_slice = ranked[args.shard :: args.num_shards][:160]
+        my_slice = ranked[args.shard :: args.num_shards][:240]
         for i, (gi, wt) in enumerate(my_slice):
             w, h, dm, f, _, _, di, si = G[gi]
             w, h, dm, di, si = int(w), int(h), int(dm), int(di), int(si)

@@ -270,7 +270,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  wave39d_fast_hopper_and_topo:
+  wave39d_fast_stock_hopper:
     needs: consolidate_w39_megapool
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -290,7 +290,7 @@ jobs:
         with:
           name: ${{ inputs.run_tag }}-megapool-bundle
           path: .
-      - name: Run Wave 39D 32-Core Split (0..3 Topology Transporter Top-80 Gaps, 4..7 Fast Stock Hopper Fresh Basins!)
+      - name: Run Wave 39D 32-Core Pure Proven Fast Stock Hopper on W38 Fresh Basins (298/264/995/785/963/902/694!)
         env:
           SHARD_ID: ${{ matrix.shard }}
         run: |
@@ -300,29 +300,16 @@ jobs:
           ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
           ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w39_ds/pub_base_v5.npz
           ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w39_ds/frontier_targets_public.json
-          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w39_ds/lag_targets.json
           ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w39_ds/
           export SQ_DS_DIR="/tmp/sq_w39_ds"
           export FQ_BIN="/tmp/sq_bins/fq"
-          if [ "$SHARD_ID" -le 3 ]; then
-            python3 -u squares_math/workers/w38e_topology_transporter.py \
-              --union-npz /tmp/sq_w39_ds/pub_base_v5.npz \
-              --win-glob "pool/wins/**/*.npz" \
-              --frontier-json /tmp/sq_w39_ds/frontier_targets_public.json \
-              --lags-json /tmp/sq_w39_ds/lag_targets.json \
-              --shard "$SHARD_ID" --num-shards 4 --procs 4 --budget-sec 2600 --hop-sec 105 \
-              --seed-off 395000 --max-targets 80 \
-              --out-npz "artifacts/w39d_${SHARD_ID}/w39d_topo_s${SHARD_ID}.npz"
-          else
-            SUB=$((SHARD_ID - 4))
-            python3 -u squares_math/workers/w32a_fresh_basin_fast_hopper.py \
-              --union-npz /tmp/sq_w39_ds/pub_base_v5.npz \
-              --win-glob "pool/wins/**/*.npz" \
-              --frontier-json /tmp/sq_w39_ds/frontier_targets_public.json \
-              --shard "$SUB" --num-shards 4 --procs 4 --budget-sec 2550 \
-              --hop-sec 120 --del-sec 115 --n-seeds 3 --seed-off 395000 --max-targets 96 \
-              --out-npz "artifacts/w39d_${SHARD_ID}/w39d_fh_s${SUB}.npz"
-          fi
+          python3 -u squares_math/workers/w32a_fresh_basin_fast_hopper.py \
+            --union-npz /tmp/sq_w39_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w39_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2250 \
+            --hop-sec 110 --del-sec 105 --n-seeds 3 --seed-off 395000 --max-targets 144 \
+            --out-npz "artifacts/w39d_${SHARD_ID}/w39d_fh_s${SHARD_ID}.npz"
           ls -lh "artifacts/w39d_${SHARD_ID}"
       - uses: actions/upload-artifact@v4
         if: always()
