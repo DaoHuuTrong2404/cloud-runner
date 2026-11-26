@@ -284,6 +284,7 @@ def main():
     ap.add_argument("--budget-sec", type=int, default=2800)
     ap.add_argument("--direct-sec", type=int, default=200)
     ap.add_argument("--del-sec", type=int, default=170)
+    ap.add_argument("--min-rank", type=int, default=0)
     ap.add_argument("--max-targets", type=int, default=160)
     ap.add_argument("--out-npz", required=True)
     args = ap.parse_args()
@@ -322,10 +323,10 @@ def main():
             continue
         gap_ds = max(0.0, (cur[n][0] - front_L.get(n, cur[n][0])) / math.sqrt(n))
         if gap_ds > 1e-7 or n in fresh_r21:
-            prio = gap_ds + (0.0004 if n in fresh_r21 else 0.0)
+            prio = gap_ds + (0.0004 if (args.min_rank == 0 and n in fresh_r21) else 0.0)
             scored.append((prio, n))
     scored.sort(reverse=True)
-    targets = [n for _, n in scored[: args.max_targets]]
+    targets = [n for _, n in scored[args.min_rank : args.min_rank + args.max_targets]]
     my_slice = targets[args.shard :: args.num_shards]
     print(
         f"[W29A-DeepForceHopper s={args.shard}/{args.num_shards}] Base={tot_score:.10f} "
