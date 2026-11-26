@@ -1,0 +1,258 @@
+name: "Squares Math Wave 32 Exact R23 Base: Fresh-Basin Fast Stock Hopper + De-Novo MILP Band/L-Band Gen + Vectorized lcut/ladd fq + Fresh g32 Gadgets (160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w32"
+        type: string
+      w31_run_id:
+        required: false
+        default: "45754088903"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_r23_full_base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W31 megapool + W31 wins + purely-public pub_v6_v7 ONCE (exact R23 22.0854999!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w31_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w31-megapool-bundle" -D .
+          tar -xf megapool_w31.tar
+          rm -f megapool_w31.tar
+          mkdir -p pool/wins/w31a_pol pool/wins/w31a_rem pool/wins/pub_v6_v7
+          gh run download "${{ inputs.w31_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w31-w31a-pol-*" -D pool/wins/w31a_pol || true
+          gh run download "${{ inputs.w31_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w31-w31a-rem-*" -D pool/wins/w31a_rem || true
+          cp -f squares_math/seeds/pub_v6_v7_public_wins.npz pool/wins/pub_v6_v7/
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w32.tar pool
+          ls -lh megapool_w32.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w32.tar
+          retention-days: 7
+
+  wave32a_fresh_fast_hopper:
+    needs: consolidate_r23_full_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 32A Fast Stock Hopper + Fast 180-sq n+1 Removal on Fresh R23/pub_v7 Basins (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w32.tar
+          mkdir -p "artifacts/w32a_${SHARD_ID}" /tmp/sq_w32_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w32_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w32_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w32_ds/
+          export SQ_DS_DIR="/tmp/sq_w32_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w32a_fresh_basin_fast_hopper.py \
+            --union-npz /tmp/sq_w32_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w32_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2700 \
+            --hop-sec 200 --del-sec 180 \
+            --out-npz "artifacts/w32a_${SHARD_ID}/w32a_fh_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w32a_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w32a-${{ matrix.shard }}
+          path: artifacts/w32a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave32b_milp_band_lband:
+    needs: consolidate_r23_full_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 32B De-Novo Exact-Angle MILP Band/L-Band Generator -> Rust fq -> Fast Stock Hopper
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w32.tar
+          mkdir -p "artifacts/w32b_${SHARD_ID}" /tmp/sq_w32_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w32_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w32_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w32_ds/
+          export SQ_DS_DIR="/tmp/sq_w32_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w32b_milp_band_and_lband_gen.py \
+            --union-npz /tmp/sq_w32_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w32_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 16 --procs 4 --budget-sec 2700 \
+            --hop-sec 160 --max-targets 128 \
+            --out-npz "artifacts/w32b_${SHARD_ID}/w32b_milp_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w32b_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w32b-${{ matrix.shard }}
+          path: artifacts/w32b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave32c_lcut_ladd_fq:
+    needs: consolidate_r23_full_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 32C Vectorized 7x7 lcut + ladd -> Rust fq -> Fast Stock Hopper
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w32.tar
+          mkdir -p "artifacts/w32c_${SHARD_ID}" /tmp/sq_w32_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w32_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w32_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w32_ds/
+          export SQ_DS_DIR="/tmp/sq_w32_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w32c_lcut_ladd_fq_hopper.py \
+            --union-npz /tmp/sq_w32_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w32_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2700 \
+            --hop-sec 150 --max-targets 64 \
+            --out-npz "artifacts/w32c_${SHARD_ID}/w32c_lc_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w32c_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w32c-${{ matrix.shard }}
+          path: artifacts/w32c_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave32d_fresh_g32_gadgets:
+    needs: consolidate_r23_full_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 32D Fresh R23 Bottleneck Gadget Surgery (0..3 shrink, 4..7 grow -> feeds W33 14-Wave 4D-DP!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w32.tar
+          mkdir -p "artifacts/w32d_${SHARD_ID}" /tmp/sq_w32_ds /tmp/sq_bins
+          if [ "$SHARD_ID" -le 3 ]; then
+            (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          else
+            (cd squares_math/fq_crate && cargo build --release --bin fq)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          fi
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w32_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w32_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w32_ds/
+          export SQ_DS_DIR="/tmp/sq_w32_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          if [ "$SHARD_ID" -le 3 ]; then
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w32_ds/pub_base_v5.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --prev-glob "pool/gadgets/**/*.npz" \
+              --lags-json /tmp/sq_w32_ds/lag_targets.json \
+              --mode bottleneck_shrink --shard "$SHARD_ID" --num-shards 4 --procs 4 --budget-sec 2700 \
+              --out-npz "artifacts/w32d_${SHARD_ID}/g32_bn_shrink_s${SHARD_ID}.npz"
+          else
+            SUB=$((SHARD_ID - 4))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w32_ds/pub_base_v5.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --prev-glob "pool/gadgets/**/*.npz" \
+              --lags-json /tmp/sq_w32_ds/lag_targets.json \
+              --mode bottleneck_grow --shard "$SUB" --num-shards 4 --procs 4 --budget-sec 2700 \
+              --out-npz "artifacts/w32d_${SHARD_ID}/g32_bn_grow_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w32d_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w32d-${{ matrix.shard }}
+          path: artifacts/w32d_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7

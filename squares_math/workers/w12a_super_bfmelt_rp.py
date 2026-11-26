@@ -223,6 +223,12 @@ def load_frontier_with_wins(union_npz, win_globs):
                 cur[n2] = (span(sq2), sq2)
                 fresh.add(n2)
                 moved += 1
+        for n in range(999, 1, -1):
+            if cur[n + 1][0] < cur[n][0] - 1e-8:
+                sq_sub = cur[n + 1][1][:-1].copy()
+                cur[n] = (span(sq_sub), sq_sub)
+                fresh.add(n)
+                moved += 1
         if not moved:
             break
     tot = sum(cur[n][0] / math.sqrt(n) - 1.0 for n in range(1, 1001))
