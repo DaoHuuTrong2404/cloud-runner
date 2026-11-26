@@ -1,0 +1,261 @@
+name: "Squares Math Wave 28 Grandmaster Multi-Engine Assault (156 Free Cores: Force-Hopper + Transplant/Inflate/MILP + De-Novo Frames/Sub0.50/LNS + Frontier Melt!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w28"
+        type: string
+      w26_run_id:
+        required: false
+        default: "45590692046"
+        type: string
+      w27_run_id:
+        required: false
+        default: "45606313243"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_r20_base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Consolidate W26 megapool + W26AB + W26D + W27 + pub_v6 ONCE (0 rate limit!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w26_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w26-megapool-bundle" -D .
+          tar -xf megapool_w26.tar
+          rm -f megapool_w26.tar
+          gh run download "${{ inputs.w26_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w26-w26ab-bundle" -D . || true
+          mkdir -p pool/wins/w26a pool/wins/w26d pool/wins/w27 pool/wins/pub_v6 pool/gadgets/g26
+          if [ -f w26ab_bundle.tar ]; then
+            tar -xf w26ab_bundle.tar
+            find w26ab_out -name "w26a_*.npz" -exec cp -f {} pool/wins/w26a/ \; || true
+            find w26ab_out -name "g26_*.npz"  -exec cp -f {} pool/gadgets/g26/ \; || true
+            rm -rf w26ab_out w26ab_bundle.tar
+          fi
+          gh run download "${{ inputs.w26_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w26-w26d-*" -D pool/wins/w26d || true
+          gh run download "${{ inputs.w27_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w27-s-*"    -D pool/wins/w27  || true
+          cp -f squares_math/seeds/pub_v6_real_wins.npz pool/wins/pub_v6/pub_v6_real_wins.npz
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w28.tar pool
+          ls -lh megapool_w28.tar
+
+      - name: Upload single consolidated W28 archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w28.tar
+          retention-days: 7
+
+  wave28a_force_hopper:
+    needs: consolidate_r20_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install numerical + LP + Numba stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - name: Download SINGLE consolidated W28 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 28A Force-Guided LP Cluster Hopper + n+1 Removal Screening (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w28.tar
+          mkdir -p "artifacts/w28a_${SHARD_ID}" /tmp/sq_w28_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w28_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w28_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w28_ds/
+          export SQ_DS_DIR="/tmp/sq_w28_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w28a_force_hopper_assault.py \
+            --union-npz /tmp/sq_w28_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w28_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 16 --procs 4 --budget-sec 2280 \
+            --out-npz "artifacts/w28a_${SHARD_ID}/w28a_hopper_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w28a_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w28a-${{ matrix.shard }}
+          path: artifacts/w28a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave28b_transplant_inflate_milp:
+    needs: consolidate_r20_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install numerical + LP + Numba stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - name: Download SINGLE consolidated W28 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 28B Cross-K Transplant + Inflate + HiGHS 0-1 MILP Refill & GRID_BREAK (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w28.tar
+          mkdir -p "artifacts/w28b_${SHARD_ID}" /tmp/sq_w28_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w28_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w28_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w28_ds/
+          export SQ_DS_DIR="/tmp/sq_w28_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w28b_transplant_inflate_milp.py \
+            --union-npz /tmp/sq_w28_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w28_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2280 \
+            --out-npz "artifacts/w28b_${SHARD_ID}/w28b_tr_milp_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w28b_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w28b-${{ matrix.shard }}
+          path: artifacts/w28b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave28c_denovo_frames_sub050_lns:
+    needs: consolidate_r20_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install numerical + LP + Numba stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - name: Download SINGLE consolidated W28 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 28C De-Novo Two-Band Frames + Sub-0.50 Corridor + Structured LNS (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w28.tar
+          mkdir -p "artifacts/w28c_${SHARD_ID}" /tmp/sq_w28_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w28_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w28_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w28_ds/
+          export SQ_DS_DIR="/tmp/sq_w28_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w28c_denovo_frames_sub050_lns.py \
+            --union-npz /tmp/sq_w28_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w28_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2280 \
+            --out-npz "artifacts/w28c_${SHARD_ID}/w28c_frames_lns_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w28c_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w28c-${{ matrix.shard }}
+          path: artifacts/w28c_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave28d_frontier_boxmelt:
+    needs: consolidate_r20_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install numerical stack
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+      - name: Download SINGLE consolidated W28 archive (1 API call!)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 28D Exact Frontier Box-Expanded Melt + Dense Round-Press (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w28.tar
+          mkdir -p "artifacts/w28d_${SHARD_ID}" /tmp/sq_w28_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w28_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w28_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w28_ds/
+          export SQ_DS_DIR="/tmp/sq_w28_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          python3 -u squares_math/workers/w28d_frontier_boxmelt_super.py \
+            --union-npz /tmp/sq_w28_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w28_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 7 --procs 4 --budget-sec 2280 \
+            --out-npz "artifacts/w28d_${SHARD_ID}/w28d_melt_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w28d_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w28d-${{ matrix.shard }}
+          path: artifacts/w28d_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
