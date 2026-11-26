@@ -31,8 +31,29 @@ sys.path.insert(0, HERE)
 
 import w5b_2d_faultdp_gadgetq as f2d
 
-# Refine seam quantization THR from 6 to 10 buckets (eliminates false mode-0 seam rejections!)
-f2d.THR = np.array([0.0, 0.25, 0.40, 0.50, 0.58, 0.65, 0.72, 0.79, 0.86, 0.93])
+# Refine seam quantization THR from 10 to 18 fine buckets (0.03-0.04 step -> unlocks hidden 4D-DP compositions!)
+f2d.THR = np.array(
+    [
+        0.0,
+        0.25,
+        0.40,
+        0.48,
+        0.52,
+        0.56,
+        0.60,
+        0.64,
+        0.68,
+        0.72,
+        0.76,
+        0.80,
+        0.83,
+        0.86,
+        0.89,
+        0.92,
+        0.95,
+        0.97,
+    ]
+)
 f2d.NB = len(f2d.THR)
 
 
@@ -315,6 +336,8 @@ def main():
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--num-shards", type=int, default=12)
     ap.add_argument("--procs", type=int, default=4)
+    ap.add_argument("--budget-sec", type=int, default=2900)
+    ap.add_argument("--seed-off", type=int, default=0)
     ap.add_argument("--out-npz", required=True)
     args = ap.parse_args()
 
@@ -397,6 +420,7 @@ def main():
     lags = json.load(open(args.lags_json)) if os.path.exists(args.lags_json) else []
     lag_set = {int(it["n"]) for it in lags}
 
+    grid_breaks = {605, 762, 819, 877, 1000}
     cands = []
     for n in range(80, 1001):
         K = math.isqrt(n)
@@ -404,14 +428,21 @@ def main():
         if D == 0 or D > f2d.DMAX:
             continue
         s0 = cur[n][0]
-        if s0 >= K + 1 - 1e-7:
+        if s0 >= K + 1 - 1e-7 and n not in grid_breaks:
             continue
         chains = extract_diverse_chains(
-            dp, PG, PM, PQ, G, K, D, max_chains=2 if n in lag_set else 1
+            dp,
+            PG,
+            PM,
+            PQ,
+            G,
+            K,
+            D,
+            max_chains=3 if (n in lag_set or n in grid_breaks) else 1,
         )
         for ci, (f_dp, links, fp) in enumerate(chains):
             gap = (K + f_dp) - s0
-            lim = 0.0085 if n in lag_set else 0.004
+            lim = 0.0115 if (n in lag_set or n in grid_breaks) else 0.0045
             if gap < lim:
                 sq_comp = f2d.compose_packing(K, D, f_dp, links, G, donors)
                 if sq_comp is not None and len(sq_comp) == n:
@@ -420,14 +451,24 @@ def main():
     cands.sort(key=lambda z: (z[0], -z[1]))
     my_cands = cands[args.shard :: args.num_shards]
     print(
-        f"[W8B Shard {args.shard}] Total Mega-Pool DP candidates={len(cands)} (exact<0: {sum(1 for z in cands if z[0] < -1e-7)}), my_slice={len(my_cands)}",
+        f"[W8B Shard {args.shard}] 18-bucket DP candidates={len(cands)} (exact<0: {sum(1 for z in cands if z[0] < -1e-7)}), my_slice={len(my_cands)}",
         flush=True,
     )
 
     wins = {}
     tot_ds = 0.0
+
+    def save_ckpt():
+        pl = {}
+        for k_n, (Lf, xf, yf, tf) in sorted(wins.items()):
+            pl[f"L_{k_n}"] = np.array([Lf], dtype=np.float64)
+            pl[f"x_{k_n}"] = np.asarray(xf, dtype=np.float64)
+            pl[f"y_{k_n}"] = np.asarray(yf, dtype=np.float64)
+            pl[f"t_{k_n}"] = np.asarray(tf, dtype=np.float64)
+        np.savez_compressed(args.out_npz, **pl)
+
     job_args = [
-        (n, s0, sq_comp, f_dp, 888001 + args.shard * 10000 + i * 31)
+        (n, s0, sq_comp, f_dp, 888001 + args.seed_off + args.shard * 10000 + i * 31)
         for i, (gap, n, s0, sq_comp, f_dp, ci) in enumerate(my_cands)
     ]
     with ProcessPoolExecutor(max_workers=args.procs) as ex:
@@ -446,22 +487,17 @@ def main():
                         f"  [W8B WIN] n={n:4d} {cur[n][0]:.7f} -> {Lf:.7f} (dL={dL:.7f}, dS={dL / math.sqrt(n):.8f})",
                         flush=True,
                     )
-            if time.time() - t0 > 4500:
+                    save_ckpt()
+            if time.time() - t0 > args.budget_sec:
                 print(
-                    f"[W8B Shard {args.shard}] Time limit reached cleanly; cancelling remaining futures.",
+                    f"[W8B Shard {args.shard}] Time limit {args.budget_sec}s reached cleanly; cancelling remaining futures.",
                     flush=True,
                 )
                 for f_rem in futs:
                     f_rem.cancel()
                 break
 
-    payload = {}
-    for n, (Lf, xf, yf, tf) in sorted(wins.items()):
-        payload[f"L_{n}"] = np.array([Lf], dtype=np.float64)
-        payload[f"x_{n}"] = np.asarray(xf, dtype=np.float64)
-        payload[f"y_{n}"] = np.asarray(yf, dtype=np.float64)
-        payload[f"t_{n}"] = np.asarray(tf, dtype=np.float64)
-    np.savez_compressed(args.out_npz, **payload)
+    save_ckpt()
     print(
         f"[W8B Shard {args.shard} DONE] {len(wins)} certified wins, total_dS={tot_ds:.9f} -> {args.out_npz} ({time.time() - t0:.1f}s)",
         flush=True,

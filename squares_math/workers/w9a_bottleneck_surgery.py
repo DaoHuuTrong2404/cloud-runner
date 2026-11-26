@@ -30,8 +30,29 @@ sys.path.insert(0, HERE)
 
 import w5b_2d_faultdp_gadgetq as f2d
 
-# Match Wave 8B 10-bucket refined THR
-f2d.THR = np.array([0.0, 0.25, 0.40, 0.50, 0.58, 0.65, 0.72, 0.79, 0.86, 0.93])
+# Match Wave 35 upgraded 18-bucket refined THR (0.03-0.04 step)
+f2d.THR = np.array(
+    [
+        0.0,
+        0.25,
+        0.40,
+        0.48,
+        0.52,
+        0.56,
+        0.60,
+        0.64,
+        0.68,
+        0.72,
+        0.76,
+        0.80,
+        0.83,
+        0.86,
+        0.89,
+        0.92,
+        0.95,
+        0.97,
+    ]
+)
 f2d.NB = len(f2d.THR)
 ANNEAL_BIN = os.environ.get("ANNEAL_BIN", "/tmp/sq_bins/anneal")
 
@@ -543,6 +564,7 @@ def main():
     ap.add_argument("--num-shards", type=int, default=8)
     ap.add_argument("--procs", type=int, default=4)
     ap.add_argument("--budget-sec", type=int, default=3600)
+    ap.add_argument("--seed-off", type=int, default=0)
     ap.add_argument("--out-npz", required=True)
     args = ap.parse_args()
 
@@ -553,12 +575,20 @@ def main():
     G = f2d.extract_2d_gadgets(donors)
     dp, PG, PM, PQ = f2d.run_2d_dp(G)
     print(
-        f"[W9A-{args.mode} s={args.shard}/{args.num_shards}] donors={len(donors)} (prev={n_prev}) -> G={len(G)}, 10-bucket 4D-DP solved ({time.time() - t0:.1f}s)",
+        f"[W9A-{args.mode} s={args.shard}/{args.num_shards}] donors={len(donors)} (prev={n_prev}) -> G={len(G)}, 18-bucket 4D-DP solved ({time.time() - t0:.1f}s)",
         flush=True,
     )
 
     lags = json.load(open(args.lags_json)) if os.path.exists(args.lags_json) else []
-    lag_wt = {int(it["n"]): float(it.get("dS", 1e-5)) for it in lags}
+    # Dynamic LIVE gap weights computed against current cur_L[n] (not stale initial Lu!)
+    lag_wt = {}
+    for it in lags:
+        nn = int(it["n"])
+        lb = float(it.get("Lb", cur_L.get(nn, 0.0)))
+        live_ds = max(0.0, (cur_L.get(nn, lb) - lb) / math.sqrt(nn))
+        if live_ds > 1e-7:
+            lag_wt[nn] = live_ds
+    grid_breaks = {605, 762, 819, 877, 1000}
 
     # Map best gadget index for each (w, h, dm) so bottleneck_grow can look up exact predecessors!
     best_gi = {}
@@ -567,7 +597,7 @@ def main():
         if k not in best_gi or float(G[gi, 3]) < float(G[best_gi[k], 3]):
             best_gi[k] = gi
 
-    # Extract bottleneck gadgets & pairs weighted by downstream lag dS across ALL n=80..1000!
+    # Extract bottleneck gadgets & pairs weighted by downstream LIVE lag dS across ALL n=80..1000!
     bn_weight = {}
     pair_weight = {}
     for n in range(80, 1001):
@@ -575,11 +605,18 @@ def main():
         D = n - K * K
         if D == 0 or D > f2d.DMAX:
             continue
-        if cur_L[n] >= K + 1 - 1e-7:
+        if cur_L[n] >= K + 1 - 1e-7 and n not in grid_breaks:
             continue
         wt = lag_wt.get(n, 2e-6)
         chains = extract_top_chains(
-            dp, PG, PM, PQ, G, K, D, max_chains=3 if n in lag_wt else 1
+            dp,
+            PG,
+            PM,
+            PQ,
+            G,
+            K,
+            D,
+            max_chains=3 if (n in lag_wt or n in grid_breaks) else 1,
         )
         for f_ch, links in chains:
             if (K + f_ch) > cur_L[n] + 0.015:
@@ -610,7 +647,15 @@ def main():
                 continue
             sq_crop, _ = f2d.crop_gadget(donors[di], si, w, h, dm)
             jobs.append(
-                ("bottleneck_shrink", w, h, dm, float(f), sq_crop, i * 19 + args.shard)
+                (
+                    "bottleneck_shrink",
+                    w,
+                    h,
+                    dm,
+                    float(f),
+                    sq_crop,
+                    args.seed_off + i * 19 + args.shard,
+                )
             )
 
     elif args.mode == "bottleneck_grow":
@@ -659,7 +704,7 @@ def main():
                     float(f0),
                     float(f_tgt),
                     sq_crop,
-                    i * 23 + args.shard,
+                    args.seed_off + i * 23 + args.shard,
                 )
             )
 
@@ -671,7 +716,15 @@ def main():
             if comp is not None:
                 W, H, dm_sum, f0, sq_pair = comp
                 jobs.append(
-                    ("bottleneck_pair", W, H, dm_sum, f0, sq_pair, i * 29 + args.shard)
+                    (
+                        "bottleneck_pair",
+                        W,
+                        H,
+                        dm_sum,
+                        f0,
+                        sq_pair,
+                        args.seed_off + i * 29 + args.shard,
+                    )
                 )
 
     print(
