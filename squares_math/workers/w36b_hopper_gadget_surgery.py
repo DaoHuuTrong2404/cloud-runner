@@ -75,6 +75,30 @@ def hopper_shrink_gadget(job):
     best_S = L0
     best_P = None
 
+    # Quick initial fq seam-weld (especially helpful for fused pairs!) before Stock Hopper
+    if os.path.exists(f2d.FQ_BIN):
+        with tempfile.TemporaryDirectory(prefix=f"w36b_pre_{w}_{h}_") as tmp_pre:
+            r_pre = f2d.run_fq(
+                L0 + 1e-4,
+                full,
+                tmp_pre,
+                [
+                    "--loosen",
+                    "1.010",
+                    "--kick",
+                    "0.003",
+                    "--seed",
+                    str(seed & 0x3FFFFFFF),
+                    "--flip-top",
+                    "32",
+                    "--pit",
+                    "180",
+                ],
+                timeout=22,
+            )
+            if r_pre is not None and r_pre[0] < best_S - 1e-6:
+                best_S, best_P = r_pre[0], w32a.safe_open(r_pre[1])
+
     # 2 diverse seeds of FAST Stock sq_engine.Hopper + SLP cascade directly on the padded gadget!
     for si in range(2):
         P_src = best_P if best_P is not None else full
@@ -136,6 +160,7 @@ def main():
     ap.add_argument("--prev-glob", action="append", default=[])
     ap.add_argument("--dp-cache", default="")
     ap.add_argument("--lags-json", required=True)
+    ap.add_argument("--mode", choices=("single", "pairs"), default="single")
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--num-shards", type=int, default=8)
     ap.add_argument("--procs", type=int, default=4)
@@ -177,6 +202,7 @@ def main():
     grid_breaks = {605, 762, 819, 877, 1000}
 
     bn_weight = {}
+    pair_weight = {}
     for n in range(120, 1001):
         K = math.isqrt(n)
         D = n - K * K
@@ -198,38 +224,62 @@ def main():
         for f_ch, links in chains:
             if (K + f_ch) > cur_L[n] + 0.015:
                 continue
-            for g, mode in links:
+            for idx_l, (g, mode) in enumerate(links):
                 fg = float(G[g, 3])
                 if fg >= f_ch - 0.009:
                     bn_weight[g] = bn_weight.get(g, 0.0) + wt
+                if idx_l + 1 < len(links):
+                    g2, mode2 = links[idx_l + 1]
+                    if max(fg, float(G[g2, 3])) >= f_ch - 0.009:
+                        pk = (g, g2, mode2)
+                        pair_weight[pk] = pair_weight.get(pk, 0.0) + wt
 
-    # Focus on M in [7..30] gadgets (unlocking K^2+1 sub-0.50 & mid-size high-leverage bottlenecks!)
-    ranked = []
-    for gi, wt in sorted(bn_weight.items(), key=lambda x: -x[1]):
-        w, h, dm = int(G[gi, 0]), int(G[gi, 1]), int(G[gi, 2])
-        if 7 <= max(w, h) <= 30 and float(G[gi, 3]) >= 0.45:
-            ranked.append((gi, wt))
-    my_slice = ranked[args.shard :: args.num_shards][:140]
     jobs = []
-    for i, (gi, wt) in enumerate(my_slice):
-        w, h, dm, f, _, _, di, si = G[gi]
-        w, h, dm, di, si = int(w), int(h), int(dm), int(di), int(si)
-        sq_crop, _ = f2d.crop_gadget(donors[di], si, w, h, dm)
-        jobs.append(
-            (
-                w,
-                h,
-                dm,
-                float(f),
-                sq_crop,
-                args.seed_off + args.shard * 10007 + i * 197,
-                args.hop_sec,
+    if args.mode == "pairs":
+        ranked = sorted(pair_weight.items(), key=lambda x: -x[1])
+        my_slice = ranked[args.shard :: args.num_shards][:120]
+        for i, ((g1, g2, mode2), wt) in enumerate(my_slice):
+            comp = w9a.compose_pair_rect(donors, G, g1, g2, mode2)
+            if comp is not None:
+                W, H, dm_sum, f0, sq_pair = comp
+                jobs.append(
+                    (
+                        W,
+                        H,
+                        dm_sum,
+                        float(f0),
+                        sq_pair,
+                        args.seed_off + args.shard * 10007 + i * 211,
+                        args.hop_sec,
+                    )
+                )
+    else:
+        # Focus on M in [7..30] gadgets (unlocking K^2+1 sub-0.50 & mid-size high-leverage bottlenecks!)
+        ranked = []
+        for gi, wt in sorted(bn_weight.items(), key=lambda x: -x[1]):
+            w, h, dm = int(G[gi, 0]), int(G[gi, 1]), int(G[gi, 2])
+            if 7 <= max(w, h) <= 30 and float(G[gi, 3]) >= 0.45:
+                ranked.append((gi, wt))
+        my_slice = ranked[args.shard :: args.num_shards][:140]
+        for i, (gi, wt) in enumerate(my_slice):
+            w, h, dm, f, _, _, di, si = G[gi]
+            w, h, dm, di, si = int(w), int(h), int(dm), int(di), int(si)
+            sq_crop, _ = f2d.crop_gadget(donors[di], si, w, h, dm)
+            jobs.append(
+                (
+                    w,
+                    h,
+                    dm,
+                    float(f),
+                    sq_crop,
+                    args.seed_off + args.shard * 10007 + i * 197,
+                    args.hop_sec,
+                )
             )
-        )
 
     print(
-        f"[W36B-HopGadget s={args.shard}/{args.num_shards}] donors={len(donors)} G={len(G)} "
-        f"eligible_bn={len(ranked)} queued={len(jobs)} ({time.time() - t0:.1f}s)",
+        f"[W36B-HopGadget-{args.mode} s={args.shard}/{args.num_shards}] donors={len(donors)} G={len(G)} "
+        f"eligible={len(ranked)} queued={len(jobs)} ({time.time() - t0:.1f}s)",
         flush=True,
     )
 
