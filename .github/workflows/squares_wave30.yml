@@ -1,0 +1,195 @@
+name: "Squares Math Wave 30 HopperV2 Unlocked-Band + Grand 13-Wave 4D-DP + Top-35 Marathon Snipers (156 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w30"
+        type: string
+      w29_run_id:
+        required: false
+        default: "45739086119"
+        type: string
+      w29d_run_id:
+        required: false
+        default: "45740551083"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_r22_base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W29 megapool + ALL W29A/C/D wins ONCE (0 rate limit!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w29_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w29-megapool-bundle" -D .
+          tar -xf megapool_w29.tar
+          rm -f megapool_w29.tar
+          mkdir -p pool/wins/w29a pool/wins/w29c pool/wins/w29d
+          gh run download "${{ inputs.w29_run_id }}"  --repo DaoHuuTrong2404/cloud-runner -p "w29-w29a-*" -D pool/wins/w29a || true
+          gh run download "${{ inputs.w29_run_id }}"  --repo DaoHuuTrong2404/cloud-runner -p "w29-w29c-*" -D pool/wins/w29c || true
+          gh run download "${{ inputs.w29d_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w29d-s-*"   -D pool/wins/w29d || true
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w30.tar pool
+          ls -lh megapool_w30.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w30.tar
+          retention-days: 7
+
+  wave30a_hopper_v2_unlocked:
+    needs: consolidate_r22_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 30A HopperV2 Unlocked-Band Force-Hopper (8 puzzles, 4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w30.tar
+          mkdir -p "artifacts/w30a_${SHARD_ID}" /tmp/sq_w30_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w30_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w30_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w30_ds/
+          export SQ_DS_DIR="/tmp/sq_w30_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w30a_hopper_v2_unlocked.py \
+            --union-npz /tmp/sq_w30_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w30_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 2800 \
+            --v2-sec 190 --del-sec 160 --min-rank 0 --max-targets 160 \
+            --out-npz "artifacts/w30a_${SHARD_ID}/w30a_hv2_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w30a_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w30a-${{ matrix.shard }}
+          path: artifacts/w30a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave30b_grand_13wave_dp:
+    needs: consolidate_r22_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 30B Grand 13-Wave Full-Frontier 4D-DP + Deep Seam-fq + Contact LP (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w30.tar
+          mkdir -p "artifacts/w30b_${SHARD_ID}" /tmp/sq_w30_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w30_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w30_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w30_ds/
+          export SQ_DS_DIR="/tmp/sq_w30_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w30_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --gadget-glob "pool/gadgets/**/*.npz" \
+            --lags-json /tmp/sq_w30_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 \
+            --out-npz "artifacts/w30b_${SHARD_ID}/w30b_13wdp_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w30b_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w30b-${{ matrix.shard }}
+          path: artifacts/w30b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave30c_top35_marathon:
+    needs: consolidate_r22_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 30C HopperV2 Marathon Sniper on Top-35 Biggest Frontier Gaps (5 puzzles, 4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w30.tar
+          mkdir -p "artifacts/w30c_${SHARD_ID}" /tmp/sq_w30_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w30_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w30_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w30_ds/
+          export SQ_DS_DIR="/tmp/sq_w30_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w30a_hopper_v2_unlocked.py \
+            --union-npz /tmp/sq_w30_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w30_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 7 --procs 4 --budget-sec 2800 \
+            --v2-sec 220 --del-sec 180 --min-rank 0 --max-targets 35 --marathon \
+            --out-npz "artifacts/w30c_${SHARD_ID}/w30c_mar_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w30c_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w30c-${{ matrix.shard }}
+          path: artifacts/w30c_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
