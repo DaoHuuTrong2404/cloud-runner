@@ -178,16 +178,20 @@ def pick_near_band(P1, max_cand=180):
 
 
 def worker_fresh_hopper(job):
-    n, L0, arr0, arr_p1, L_p1, seed, hop_sec, del_sec = job
+    n, L0, arr0, arr_p1, L_p1, seed, hop_sec, del_sec, n_seeds = job
     best_S = L0
     best_P = None
     best_tag = ""
 
-    # Phase 1: 5 diverse seeds of FAST Stock sq_engine.Hopper + SLP cascade
-    for si in range(5):
+    # Phase 1: n_seeds diverse seeds of FAST Stock sq_engine.Hopper + SLP cascade
+    for si in range(n_seeds):
         P_src = best_P if best_P is not None else arr0
         Q, S, _ = run_stock_hopper_chain(
-            P_src, seed + si * 7919, first_sec=hop_sec, cascade_sec=150, max_cascades=3
+            P_src,
+            seed + si * 7919,
+            first_sec=hop_sec,
+            cascade_sec=min(140, hop_sec),
+            max_cascades=3,
         )
         if S < best_S - 1e-8:
             best_S, best_P, best_tag = S, Q, f"sh_s{si}"
@@ -290,6 +294,9 @@ def main():
     ap.add_argument("--budget-sec", type=int, default=2700)
     ap.add_argument("--hop-sec", type=int, default=200)
     ap.add_argument("--del-sec", type=int, default=180)
+    ap.add_argument("--n-seeds", type=int, default=3)
+    ap.add_argument("--seed-off", type=int, default=0)
+    ap.add_argument("--max-targets", type=int, default=96)
     ap.add_argument("--out-npz", required=True)
     args = ap.parse_args()
 
@@ -301,8 +308,14 @@ def main():
     front_rows = json.load(open(args.frontier_json))
     front_L = {int(r["n"]): float(r["L_front"]) for r in front_rows}
 
-    # VIP fresh basins from pub_v6, pub_v7 (jazivxt Nov26!), W28, W29, W30 + their n-1 / n+1 neighbors!
+    # VIP fresh basins (W32A jumps 451/654 first + pub_v7 + W30 + neighbors!)
     vip_seeds = [
+        451,
+        450,
+        452,
+        654,
+        653,
+        655,
         809,
         808,
         603,
@@ -403,7 +416,7 @@ def main():
                 extra.append((gap, n))
     extra.sort(reverse=True)
     for _, n in extra:
-        if len(targets) >= 64:
+        if len(targets) >= args.max_targets:
             break
         targets.append(n)
 
@@ -422,9 +435,10 @@ def main():
                 cur[n][1],
                 arr_p1,
                 L_p1,
-                3210001 + args.shard * 10169 + i * 331,
+                3210001 + args.seed_off + args.shard * 10169 + i * 331,
                 args.hop_sec,
                 args.del_sec,
+                args.n_seeds,
             )
         )
 
