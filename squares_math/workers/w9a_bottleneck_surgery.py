@@ -30,28 +30,9 @@ sys.path.insert(0, HERE)
 
 import w5b_2d_faultdp_gadgetq as f2d
 
-# Match Wave 35 upgraded 18-bucket refined THR (0.03-0.04 step)
+# Match Wave 36 sweet-spot 13-bucket refined THR (3x faster DP -> 2x more surgery per runner!)
 f2d.THR = np.array(
-    [
-        0.0,
-        0.25,
-        0.40,
-        0.48,
-        0.52,
-        0.56,
-        0.60,
-        0.64,
-        0.68,
-        0.72,
-        0.76,
-        0.80,
-        0.83,
-        0.86,
-        0.89,
-        0.92,
-        0.95,
-        0.97,
-    ]
+    [0.0, 0.30, 0.45, 0.52, 0.58, 0.64, 0.70, 0.75, 0.80, 0.85, 0.89, 0.93, 0.96]
 )
 f2d.NB = len(f2d.THR)
 ANNEAL_BIN = os.environ.get("ANNEAL_BIN", "/tmp/sq_bins/anneal")
