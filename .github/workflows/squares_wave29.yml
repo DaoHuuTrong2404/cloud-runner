@@ -1,0 +1,244 @@
+name: "Squares Math Wave 29 Nuclear Ping-Pong (156 Free Cores: 80c Deep 4-Seed Force-Hopper + 48c Soft-to-Rigid Momentum Harden + 28c Ping-Pong Melt!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w29"
+        type: string
+      w28_run_id:
+        required: false
+        default: "45732112259"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_r21_base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W28 megapool + ALL W28A/B/C/D wins ONCE (0 rate limit!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w28_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w28-megapool-bundle" -D .
+          tar -xf megapool_w28.tar
+          rm -f megapool_w28.tar
+          mkdir -p pool/wins/w28a pool/wins/w28b pool/wins/w28c pool/wins/w28d
+          gh run download "${{ inputs.w28_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w28-w28a-*" -D pool/wins/w28a || true
+          gh run download "${{ inputs.w28_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w28-w28b-*" -D pool/wins/w28b || true
+          gh run download "${{ inputs.w28_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w28-w28d-*" -D pool/wins/w28d || true
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w29.tar pool
+          ls -lh megapool_w29.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w29.tar
+          retention-days: 7
+
+  wave29a_deep_force_hopper:
+    needs: consolidate_r21_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 29A Ultra-Deep 4-Seed Force-Guided LP Hopper (8 puzzles, 4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w29.tar
+          mkdir -p "artifacts/w29a_${SHARD_ID}" /tmp/sq_w29_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w29_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w29_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w29_ds/
+          export SQ_DS_DIR="/tmp/sq_w29_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w29a_deep_force_hopper.py \
+            --union-npz /tmp/sq_w29_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w29_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 2800 \
+            --out-npz "artifacts/w29a_${SHARD_ID}/w29a_dhop_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w29a_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w29a-${{ matrix.shard }}
+          path: artifacts/w29a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave29b_harden_reharden:
+    needs: consolidate_r21_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 29B Soft-to-Rigid Momentum Re-Hardening -> fq -> Force-Hopper (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w29.tar
+          mkdir -p "artifacts/w29b_rh_${SHARD_ID}" /tmp/sq_w29_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin harden)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/harden" /tmp/sq_bins/harden
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w29_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w29_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w29_ds/
+          export SQ_DS_DIR="/tmp/sq_w29_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          python3 -u squares_math/workers/w29b_harden_bandmerge_hopper.py \
+            --union-npz /tmp/sq_w29_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w29_ds/frontier_targets_public.json \
+            --mode reharden --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2750 \
+            --out-npz "artifacts/w29b_rh_${SHARD_ID}/w29b_rh_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w29b_rh_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w29brh-${{ matrix.shard }}
+          path: artifacts/w29b_rh_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave29b_harden_fresh:
+    needs: consolidate_r21_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 29B Fresh Disk-to-Square Momentum + NPT MC on Top-24 Med-N Traps (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w29.tar
+          mkdir -p "artifacts/w29b_fr_${SHARD_ID}" /tmp/sq_w29_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin harden --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/harden" /tmp/sq_bins/harden
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w29_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w29_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w29_ds/
+          export SQ_DS_DIR="/tmp/sq_w29_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          python3 -u squares_math/workers/w29b_harden_bandmerge_hopper.py \
+            --union-npz /tmp/sq_w29_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w29_ds/frontier_targets_public.json \
+            --mode fresh --shard "$SHARD_ID" --num-shards 4 --procs 4 --budget-sec 2750 \
+            --out-npz "artifacts/w29b_fr_${SHARD_ID}/w29b_fr_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w29b_fr_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w29bfr-${{ matrix.shard }}
+          path: artifacts/w29b_fr_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave29c_pingpong_melt:
+    needs: consolidate_r21_base
+    runs-on: ubuntu-latest
+    timeout-minutes: 62
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 29C Ping-Pong Box-Expanded Melt on Fresh R21 Basins + Frontier #113..224 (4 cores)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w29.tar
+          mkdir -p "artifacts/w29c_${SHARD_ID}" /tmp/sq_w29_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w29_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w29_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w29_ds/
+          export SQ_DS_DIR="/tmp/sq_w29_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          python3 -u squares_math/workers/w29c_pingpong_melt_fresh.py \
+            --union-npz /tmp/sq_w29_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w29_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 7 --procs 4 --budget-sec 2750 \
+            --out-npz "artifacts/w29c_${SHARD_ID}/w29c_melt_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w29c_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w29c-${{ matrix.shard }}
+          path: artifacts/w29c_${SHARD_ID}
+          if-no-files-found: warn
+          retention-days: 7
