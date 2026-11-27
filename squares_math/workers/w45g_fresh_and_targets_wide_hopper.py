@@ -224,13 +224,20 @@ def main():
                     tg_order.append(tn)
                 tg_hints[tn].append(rm)
 
-    # Lane 1: Brand-new freshly-born soft packings (W44 + pub_v9 + pub_v10 + W42 transplants!)
+    # Lane 1: Brand-new freshly-born soft packings (W45 703/921/451 + pub_v11 556 + W44 + pub_v9/v10!)
     fresh_ns = [
+        703,
+        702,
+        704,
+        556,
+        555,
+        557,
         921,
         920,
         922,
         451,
         450,
+        376,
         635,
         634,
         804,
@@ -320,9 +327,10 @@ def main():
         np.savez_compressed(args.out_npz, **pl)
 
     done = 0
-    with ProcessPoolExecutor(max_workers=args.procs) as ex:
-        futs = [ex.submit(worker_fresh_or_target, j) for j in jobs]
-        for fut in as_completed(futs):
+    ex = ProcessPoolExecutor(max_workers=args.procs)
+    futs = [ex.submit(worker_fresh_or_target, j) for j in jobs]
+    try:
+        for fut in as_completed(futs, timeout=max(30.0, deadline - time.time() + 90.0)):
             done += 1
             try:
                 n, tag, res = fut.result()
@@ -343,12 +351,29 @@ def main():
                         flush=True,
                     )
                     save_ckpt()
+            if time.time() > deadline + 45.0:
+                print(
+                    f"  [W45G s={args.shard}] Hard deadline reached after {done}/{len(jobs)} jobs.",
+                    flush=True,
+                )
+                break
+    except TimeoutError:
+        print(
+            f"  [W45G s={args.shard}] as_completed timeout after {done}/{len(jobs)} jobs — exiting cleanly!",
+            flush=True,
+        )
 
     save_ckpt()
     print(
         f"[W45G s={args.shard}] DONE in {time.time() - t0:.1f}s | wins={len(wins)} | dS={tot_ds:.8f}",
         flush=True,
     )
+    for proc in list(getattr(ex, "_processes", {}).values()):
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    os._exit(0)
 
 
 if __name__ == "__main__":

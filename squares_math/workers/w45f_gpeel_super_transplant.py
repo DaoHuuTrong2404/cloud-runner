@@ -127,10 +127,24 @@ def _try_gpeel_and_all_transplants(args_tuple):
         except Exception:
             pass
 
-    # 2. All Wave 44F stock + relaxed full + half-up transplants!
+    # 2. All Wave 44F stock + relaxed full + half-up transplants + 3-STEP CHAINED TRANSPLANT (tp3)!
     try:
         for nn, S, tag, Q in w44f._try_all_transplants_for_src((src_n, P)):
             _add(Q, S, tag)
+            if tag.startswith("tp2_"):
+                up_flag = tag.endswith("_u")
+                try:
+                    out3 = E.transplant(Q, up_flag)
+                    if out3 is not None:
+                        Q3, S3, _, _ = out3
+                        if (80 <= len(Q3) <= 1000) and E.min_gap(Q3) >= -1e-8:
+                            _add(
+                                Q3.astype(np.float64),
+                                float(S3),
+                                f"tp3_{src_n}_{'u' if up_flag else 'd'}",
+                            )
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -228,9 +242,10 @@ def main():
         np.savez_compressed(args.out_npz, **pl)
 
     done = 0
-    with ProcessPoolExecutor(max_workers=args.procs) as ex:
-        futs = [ex.submit(w42f.worker_wide_hopper_polish, j) for j in jobs]
-        for fut in as_completed(futs):
+    ex = ProcessPoolExecutor(max_workers=args.procs)
+    futs = [ex.submit(w42f.worker_wide_hopper_polish, j) for j in jobs]
+    try:
+        for fut in as_completed(futs, timeout=max(30.0, deadline - time.time() + 90.0)):
             done += 1
             try:
                 n, tag, res = fut.result()
@@ -251,12 +266,29 @@ def main():
                         flush=True,
                     )
                     save_ckpt()
+            if time.time() > deadline + 45.0:
+                print(
+                    f"  [W45F s={args.shard}] Hard deadline reached after {done}/{len(jobs)} jobs.",
+                    flush=True,
+                )
+                break
+    except TimeoutError:
+        print(
+            f"  [W45F s={args.shard}] as_completed timeout after {done}/{len(jobs)} jobs — checkpointing & exiting cleanly!",
+            flush=True,
+        )
 
     save_ckpt()
     print(
         f"[W45F s={args.shard}] DONE in {time.time() - t0:.1f}s | wins={len(wins)} | dS={tot_ds:.8f}",
         flush=True,
     )
+    for proc in list(getattr(ex, "_processes", {}).values()):
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    os._exit(0)
 
 
 if __name__ == "__main__":

@@ -798,6 +798,7 @@ def new_solver():
     h.setOptionValue("primal_feasibility_tolerance", 1e-10)
     h.setOptionValue("dual_feasibility_tolerance", 1e-10)
     h.setOptionValue("presolve", "off")
+    h.setOptionValue("time_limit", 4.0)
     return h
 
 
