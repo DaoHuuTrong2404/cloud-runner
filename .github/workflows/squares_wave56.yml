@@ -1,0 +1,227 @@
+name: "Squares Math Wave 56 GLOBAL 640-GADGET FORGE -> UNIFIED 4D FAULT-DP + FROZEN-GRID CHANNEL REMELT (88c W56G + 72c W56F = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w56"
+        type: string
+      w55_run_id:
+        required: true
+        default: "46071099976"
+        type: string
+      w55b_run_id:
+        required: true
+        default: "46072377490"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w56_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W55 + W55B megapool (<60s ultra-fast bundle!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w55_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w55-megapool-bundle" -D .
+          tar -xf megapool_w55.tar
+          rm -f megapool_w55.tar
+          mkdir -p pool/wins/pub_seeds pool/wins/w55h pool/wins/w55s pool/wins/w55k pool/wins/w55b
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w55_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w55-w55h-*" -D pool/wins/w55h || true
+          gh run download "${{ inputs.w55_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w55-w55s-*" -D pool/wins/w55s || true
+          gh run download "${{ inputs.w55_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w55-w55k-*" -D pool/wins/w55k || true
+          gh run download "${{ inputs.w55b_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w55b-w55b-*" -D pool/wins/w55b || true
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w56.tar pool/wins
+          ls -lh megapool_w56.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w56.tar
+          retention-days: 7
+
+  forge_global_rect_gadgets:
+    needs: consolidate_w56_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Forge 40 Active Rectangle Gadgets/Shard (640 Global!) in Rust `fq --rect-dx/--rect-dy`!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w56.tar
+          mkdir -p "artifacts/gforge_${SHARD_ID}" /tmp/sq_w56_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w56_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w56_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w56_ds/
+          export SQ_DS_DIR="/tmp/sq_w56_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          timeout -s KILL 430s python3 -u squares_math/workers/w56_gadget_forge.py \
+            --union-npz /tmp/sq_w56_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w56_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 16 --procs 4 --max-keys-per-shard 40 \
+            --budget-sec 375 --seed-off 700000 \
+            --out-npz "artifacts/gforge_${SHARD_ID}/gadgets_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/gforge_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-gforge-${{ matrix.shard }}
+          path: artifacts/gforge_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  merge_global_gadgets:
+    needs: forge_global_rect_gadgets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.run_tag }}-gforge-*
+          path: gforge_in
+      - name: Merge all 16 Forge shards into ONE global_rect_gadgets.npz!
+        run: |
+          python3 -u squares_math/workers/w56_merge_gadgets.py \
+            --in-glob "gforge_in/**/*.npz" \
+            --out-npz global_rect_gadgets.npz
+          ls -lh global_rect_gadgets.npz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-global-gadgets
+          path: global_rect_gadgets.npz
+          retention-days: 7
+
+  wave56g_unified_global_faultdp:
+    needs: [consolidate_w56_megapool, merge_global_gadgets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 42
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-global-gadgets
+          path: .
+      - name: Run Wave 56G 88-Core Unified Global 640-Gadget 4D Fault-DP + KKT Wider-Hopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w56.tar
+          mkdir -p "artifacts/w56g_${SHARD_ID}" /tmp/sq_w56_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w56_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w56_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w56_ds/
+          export SQ_DS_DIR="/tmp/sq_w56_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          timeout -s KILL 2020s python3 -u squares_math/workers/w56g_unified_global_faultdp.py \
+            --union-npz /tmp/sq_w56_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --global-gadgets-npz global_rect_gadgets.npz \
+            --frontier-json /tmp/sq_w56_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 22 --procs 4 --budget-sec 1880 \
+            --r1-sec 235 --r2-sec 215 --r3-sec 215 --seed-off 720000 \
+            --out-npz "artifacts/w56g_${SHARD_ID}/w56g_ugdp_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w56g_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w56g-${{ matrix.shard }}
+          path: artifacts/w56g_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave56f_frozen_grid_channel_remelt:
+    needs: [consolidate_w56_megapool, merge_global_gadgets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 42
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 56F 72-Core Frozen-Grid Wall-Anchored Channel Remelt + KKT Wider-Hopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w56.tar
+          mkdir -p "artifacts/w56f_${SHARD_ID}" /tmp/sq_w56_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w56_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w56_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w56_ds/
+          export SQ_DS_DIR="/tmp/sq_w56_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          timeout -s KILL 2020s python3 -u squares_math/workers/w56f_frozen_grid_channel_remelt.py \
+            --union-npz /tmp/sq_w56_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w56_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 18 --procs 4 --budget-sec 1880 \
+            --r1-sec 240 --r2-sec 220 --r3-sec 220 --seed-off 740000 \
+            --out-npz "artifacts/w56f_${SHARD_ID}/w56f_chm_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w56f_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w56f-${{ matrix.shard }}
+          path: artifacts/w56f_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
