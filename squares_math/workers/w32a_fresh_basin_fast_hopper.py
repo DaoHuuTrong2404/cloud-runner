@@ -73,16 +73,25 @@ def warm_numba():
 
 
 def run_stock_hopper_chain(
-    P_start, seed_base, first_sec=220, cascade_sec=160, max_cascades=3, wide=True
+    P_start,
+    seed_base,
+    first_sec=220,
+    cascade_sec=160,
+    max_cascades=3,
+    wide=True,
+    deadline=None,
 ):
     best_P = E.to_origin(P_start)
     best_S = float(E.side(best_P))
     start_S = best_S
+    sec1 = first_sec if deadline is None else min(first_sec, deadline - time.time())
+    if sec1 < 4.0:
+        return best_P, best_S, 0
     try:
         H = E.Hopper(best_P, seed=seed_base, wide=wide)
         if not H.applicable():
             return best_P, best_S, 0
-        Q, S = H.run(first_sec)
+        Q, S = H.run(sec1)
         Q = safe_open(Q)
         S = float(E.side(Q))
         if S < best_S - 1e-10 and E.min_gap(Q) >= -1e-12:
@@ -93,6 +102,8 @@ def run_stock_hopper_chain(
     wins = 1 if best_S < start_S - 1e-9 else 0
     if wins:
         for c in range(max_cascades):
+            if deadline is not None and time.time() > deadline - 5.0:
+                break
             prev_S = best_S
             # Quick SLP polish between cascades to unstick contact locks!
             try:
@@ -112,11 +123,18 @@ def run_stock_hopper_chain(
                     best_P, best_S = Qs, Ss
             except Exception:
                 pass
+            sec2 = (
+                cascade_sec
+                if deadline is None
+                else min(cascade_sec, deadline - time.time())
+            )
+            if sec2 < 4.0:
+                break
             try:
                 H2 = E.Hopper(best_P, seed=seed_base + (c + 1) * 1009, wide=wide)
                 if not H2.applicable():
                     break
-                Q2, S2 = H2.run(cascade_sec)
+                Q2, S2 = H2.run(sec2)
                 Q2 = safe_open(Q2)
                 S2 = float(E.side(Q2))
                 if S2 < best_S - 1e-10 and E.min_gap(Q2) >= -1e-12:
@@ -178,31 +196,35 @@ def pick_near_band(P1, max_cand=180):
 
 
 def worker_fresh_hopper(job):
-    n, L0, arr0, arr_p1, L_p1, seed, hop_sec, del_sec, n_seeds = job
+    n, L0, arr0, arr_p1, L_p1, seed, hop_sec, del_sec, n_seeds, deadline = job
     best_S = L0
     best_P = None
     best_tag = ""
 
-    # Phase 1: n_seeds diverse seeds of FAST Stock sq_engine.Hopper + SLP cascade
+    # Phase 1: n_seeds diverse seeds of FAST Stock + Wider-Move Hopper + SLP cascade
     for si in range(n_seeds):
+        if time.time() > deadline - 10.0:
+            break
         P_src = best_P if best_P is not None else arr0
         Q, S, _ = run_stock_hopper_chain(
             P_src,
             seed + si * 7919,
             first_sec=hop_sec,
-            cascade_sec=min(140, hop_sec),
+            cascade_sec=min(120, hop_sec),
             max_cascades=3,
+            wide=True,
+            deadline=deadline,
         )
         if S < best_S - 1e-8:
             best_S, best_P, best_tag = S, Q, f"sh_s{si}"
 
-    # Phase 2: Fast ALL-near-band n+1 removal screening (up to 180 squares!) -> Stock Hopper!
-    if arr_p1 is not None and (L_p1 - best_S) < 0.035:
+    # Phase 2: Fast ALL-near-band n+1 removal screening (up to 180 squares!) -> Wider-Move Hopper!
+    if arr_p1 is not None and (L_p1 - best_S) < 0.035 and time.time() < deadline - 25.0:
         cands = pick_near_band(arr_p1, max_cand=180)
         holes = []
         t_scr = time.time()
         for idx in cands:
-            if time.time() - t_scr > 75.0:
+            if time.time() - t_scr > 75.0 or time.time() > deadline - 20.0:
                 break
             try:
                 Qh, Sh = fast_delete_and_compact(arr_p1, idx)
@@ -218,25 +240,32 @@ def worker_fresh_hopper(job):
             if len(picked) >= 3:
                 break
         for hi, (Sh, idx, Qh) in enumerate(picked):
+            if time.time() > deadline - 10.0:
+                break
             if Sh < best_S - 1e-8:
                 best_S, best_P, best_tag = Sh, Qh, f"fdel_{idx}"
             Q2, S2, _ = run_stock_hopper_chain(
                 Qh,
                 seed + 61000 + hi * 3571,
                 first_sec=del_sec,
-                cascade_sec=150,
+                cascade_sec=120,
                 max_cascades=3,
+                wide=True,
+                deadline=deadline,
             )
             if S2 < best_S - 1e-8:
                 best_S, best_P, best_tag = S2, Q2, f"fdel_sh_{idx}"
-                # Extra 2 seeds on a brand-new removal jump (goodpjw n=654 magic!)
                 for r2 in range(2):
+                    if time.time() > deadline - 10.0:
+                        break
                     Q3, S3, _ = run_stock_hopper_chain(
                         best_P,
                         seed + 91000 + hi * 997 + r2 * 2111,
-                        first_sec=180,
-                        cascade_sec=140,
+                        first_sec=140,
+                        cascade_sec=120,
                         max_cascades=2,
+                        wide=True,
+                        deadline=deadline,
                     )
                     if S3 < best_S - 1e-8:
                         best_S, best_P, best_tag = S3, Q3, f"fdel_sh2_{idx}"
@@ -482,6 +511,7 @@ def main():
         targets.append(n)
 
     my_slice = targets[args.shard :: args.num_shards]
+    deadline = t0 + args.budget_sec
     jobs = []
     for i, n in enumerate(my_slice):
         arr_p1, L_p1 = None, 1e9
@@ -500,6 +530,7 @@ def main():
                 args.hop_sec,
                 args.del_sec,
                 args.n_seeds,
+                deadline,
             )
         )
 

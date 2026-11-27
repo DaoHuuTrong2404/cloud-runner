@@ -66,7 +66,7 @@ def _try_transplant_one(args_tuple):
 
 
 def worker_wide_hopper_polish(job):
-    n, L0, P_init, tag_in, seed, hop_sec, n_seeds = job
+    n, L0, P_init, tag_in, seed, hop_sec, n_seeds, deadline = job
     best_S = L0
     best_P = None
     best_tag = tag_in
@@ -79,14 +79,17 @@ def worker_wide_hopper_polish(job):
 
     # Run goodpjw2008 Wider-Move Hopper (wide=True: 50% stock <=9, 50% wide <=18!)
     for si in range(n_seeds):
+        if time.time() > deadline - 10.0:
+            break
         P_src = best_P if best_P is not None else P_start
         Q, S, _ = w32a.run_stock_hopper_chain(
             P_src,
             seed + si * 7919,
             first_sec=hop_sec,
-            cascade_sec=min(130, hop_sec),
+            cascade_sec=min(120, hop_sec),
             max_cascades=3,
             wide=True,
+            deadline=deadline,
         )
         if S < best_S - 1e-9:
             best_S, best_P, best_tag = S, Q, f"{tag_in}_wh_s{si}"
@@ -187,6 +190,7 @@ def main():
     )
 
     # Deduplicate best transplant per target n_new, then fill remaining queue with top live-gap Wide-Hopper targets!
+    deadline = t0 + args.budget_sec
     jobs = []
     seen_tp_n = set()
     for i, (gap, n_new, S, src_n, up, Q) in enumerate(tp_cands):
@@ -203,6 +207,7 @@ def main():
                 args.seed_off + args.shard * 10007 + i * 97,
                 args.hop_sec,
                 args.n_seeds,
+                deadline,
             )
         )
 
@@ -228,6 +233,7 @@ def main():
                 args.seed_off + 500000 + args.shard * 10007 + j_i * 131,
                 args.hop_sec,
                 args.n_seeds,
+                deadline,
             )
         )
 
