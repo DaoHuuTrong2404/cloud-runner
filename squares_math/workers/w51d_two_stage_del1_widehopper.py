@@ -191,19 +191,64 @@ def deep_contact_polish(n, P_in, deadline, slp_sec=48.0, fq_sec=28):
         except Exception:
             pass
 
-    # 3) Rust fq nonlinear L-BFGS + flip-top polish
+    # 3) Rust fq active-set SOC + dual-ranked branch flips + KKT Gauss-Newton `newton_finish` + SQP Hessian!
     rem = deadline - time.time() - 5.0
     if fq_sec > 0 and os.path.exists(f2d.FQ_BIN) and rem > 10.0:
+        t_p1 = min(int(fq_sec), max(8, int(rem * 0.40)))
         with tempfile.TemporaryDirectory(prefix=f"w51dp_{n}_") as tmp:
             r_fin = f2d.run_fq(
                 cur_s,
                 cur_a,
                 tmp,
-                ["--loosen", "1.0", "--no-alm", "--flip-top", "64", "--pit", "750"],
-                timeout=min(int(fq_sec), max(8, int(rem * 0.45))),
+                [
+                    "--loosen",
+                    "1.0",
+                    "--no-alm",
+                    "--finish",
+                    "--stag-w",
+                    "0",
+                    "--rmin",
+                    "1e-12",
+                    "--flip-top",
+                    "64",
+                    "--pit",
+                    "900",
+                    "--deadline",
+                    str(max(5, t_p1 - 2)),
+                ],
+                timeout=t_p1,
             )
             if r_fin is not None and r_fin[0] < cur_s - 1e-11:
                 cur_s, cur_a = float(r_fin[0]), w32a.safe_open(r_fin[1])
+        rem2 = deadline - time.time() - 5.0
+        if rem2 > 14.0:
+            t_p2 = min(16, max(7, int(rem2 * 0.35)))
+            with tempfile.TemporaryDirectory(prefix=f"w51sqp_{n}_") as tmp2:
+                r_sqp = f2d.run_fq(
+                    cur_s,
+                    cur_a,
+                    tmp2,
+                    [
+                        "--loosen",
+                        "1.0",
+                        "--no-alm",
+                        "--sqp",
+                        "--finish",
+                        "--stag-w",
+                        "0",
+                        "--rmin",
+                        "1e-12",
+                        "--flip-top",
+                        "32",
+                        "--pit",
+                        "500",
+                        "--deadline",
+                        str(max(4, t_p2 - 2)),
+                    ],
+                    timeout=t_p2,
+                )
+                if r_sqp is not None and r_sqp[0] < cur_s - 1e-11:
+                    cur_s, cur_a = float(r_sqp[0]), w32a.safe_open(r_sqp[1])
 
     # 4) Final rotation LP polish
     try:

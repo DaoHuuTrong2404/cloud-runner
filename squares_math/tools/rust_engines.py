@@ -218,3 +218,102 @@ def quench_rect_gadget(
             return sq, math.inf
         Q_out = normalize_to_origin(Q_out)
         return Q_out, gadget_overhang(Q_out, w, h)
+
+
+def run_fq_quench_args(P_in, extra_args, s_ref=None, timeout_s=20.0):
+    """Run compiled Rust `fq quench` with arbitrary CLI flags (e.g. `--round-r0`, `--soft-a0`,
+    `--sqp`, `--finish`, `--shrink`, `--stag-w 0`).
+    Returns `(S_exact, Q_out, js_dict)` if feasible in f64 SAT, else `None`.
+    """
+    fqbin = get_fq_bin()
+    if not os.path.exists(fqbin):
+        return None
+    P = normalize_to_origin(P_in)
+    s0 = float(s_ref) if s_ref is not None else side_exact(P)
+    with tempfile.TemporaryDirectory(prefix="fqq_") as tmp:
+        f_in = os.path.join(tmp, "a.txt")
+        f_out = os.path.join(tmp, "b.txt")
+        write_packer_cfg(f_in, s0, P)
+        cmd = [fqbin, "quench", "--in", f_in, "--out", f_out] + [
+            str(x) for x in extra_args
+        ]
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=float(timeout_s)
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        if r.returncode != 0 or not os.path.exists(f_out):
+            return None
+        js = {}
+        try:
+            js = json.loads(r.stdout.strip().splitlines()[-1])
+            mg = js.get("min_gap")
+            mw = js.get("min_wall")
+            if mg is None or mw is None or mg < -1e-12 or mw < -1e-12:
+                return None
+        except Exception:
+            return None
+        _, Q_out = read_packer_cfg(f_out)
+        if Q_out is None or Q_out.shape != P.shape or not np.isfinite(Q_out).all():
+            return None
+        Q_out = normalize_to_origin(Q_out)
+        return side_exact(Q_out), Q_out, js
+
+
+def kkt_sqp_polish_fq(P_in, timeout_each=18.0):
+    """Two-pass exact Rust KKT finisher (`newton_finish` + `--sqp` Hessian + `--stag-w 0`).
+    Projects curved tilted-band contact networks onto `{g_A = 0}` down to `1e-13`.
+    Returns `(S_best, Q_best)`.
+    """
+    best_Q = normalize_to_origin(P_in)
+    best_S = side_exact(best_Q)
+    dl = max(4.0, float(timeout_each) - 2.0)
+    r1 = run_fq_quench_args(
+        best_Q,
+        [
+            "--loosen",
+            "1.0",
+            "--no-alm",
+            "--finish",
+            "--stag-w",
+            "0",
+            "--rmin",
+            "1e-12",
+            "--flip-top",
+            "64",
+            "--pit",
+            "900",
+            "--deadline",
+            f"{dl:.1f}",
+        ],
+        s_ref=best_S,
+        timeout_s=timeout_each,
+    )
+    if r1 is not None and r1[0] < best_S - 1e-12:
+        best_S, best_Q = r1[0], r1[1]
+    r2 = run_fq_quench_args(
+        best_Q,
+        [
+            "--loosen",
+            "1.0",
+            "--no-alm",
+            "--sqp",
+            "--finish",
+            "--stag-w",
+            "0",
+            "--rmin",
+            "1e-12",
+            "--flip-top",
+            "32",
+            "--pit",
+            "500",
+            "--deadline",
+            f"{dl:.1f}",
+        ],
+        s_ref=best_S,
+        timeout_s=timeout_each,
+    )
+    if r2 is not None and r2[0] < best_S - 1e-12:
+        best_S, best_Q = r2[0], r2[1]
+    return best_S, best_Q

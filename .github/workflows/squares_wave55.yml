@@ -1,0 +1,195 @@
+name: "Squares Math Wave 55 KKT-SQP NEWTON FINISH + SOFT-TO-RIGID SNIPER & HIGH-N + CUT SNIPER & BANDFLIP (64c W55H + 80c W55S + 16c W55K = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w55"
+        type: string
+      w54_run_id:
+        required: true
+        default: "46066438252"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w55_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W54 megapool + W54 wins (<60s ultra-fast bundle!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w54_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w54-megapool-bundle" -D .
+          tar -xf megapool_w54.tar
+          rm -f megapool_w54.tar
+          mkdir -p pool/wins/pub_seeds pool/wins/w54s pool/wins/w54g pool/wins/w54d
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w54_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w54-w54s-*" -D pool/wins/w54s || true
+          gh run download "${{ inputs.w54_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w54-w54g-*" -D pool/wins/w54g || true
+          gh run download "${{ inputs.w54_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w54-w54d-*" -D pool/wins/w54d || true
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w55.tar pool/wins
+          ls -lh megapool_w55.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w55.tar
+          retention-days: 7
+
+  wave55h_reharden_sniper_highn:
+    needs: consolidate_w55_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 55H 64-Core Multi-Physics Soft-to-Rigid Sniper (`234,333` +8e-6!) + High-N Unjammer!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w55.tar
+          mkdir -p "artifacts/w55h_${SHARD_ID}" /tmp/sq_w55_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin harden)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/harden" /tmp/sq_bins/harden
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w55_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w55_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w55_ds/
+          export SQ_DS_DIR="/tmp/sq_w55_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          timeout -s KILL 2380s python3 -u squares_math/workers/w55h_reharden_sniper_and_highn.py \
+            --union-npz /tmp/sq_w55_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w55_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 16 --procs 4 --budget-sec 2220 \
+            --seed-off 620000 \
+            --out-npz "artifacts/w55h_${SHARD_ID}/w55h_soft_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w55h_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w55h-${{ matrix.shard }}
+          path: artifacts/w55h_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave55s_cutsniper_and_bandflip:
+    needs: consolidate_w55_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 55S 80-Core Cut-Sniper (`418 +3e-6`, `756 +7e-6`, `924 +1e-5`!) + BandFlip Surgery!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w55.tar
+          mkdir -p "artifacts/w55s_${SHARD_ID}" /tmp/sq_w55_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin harden)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/harden" /tmp/sq_bins/harden
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w55_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w55_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w55_ds/
+          export SQ_DS_DIR="/tmp/sq_w55_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          timeout -s KILL 2380s python3 -u squares_math/workers/w55s_ultrasniper_cuts_and_bandflip.py \
+            --union-npz /tmp/sq_w55_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w55_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 2220 \
+            --seed-off 635000 \
+            --out-npz "artifacts/w55s_${SHARD_ID}/w55s_cutbf_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w55s_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w55s-${{ matrix.shard }}
+          path: artifacts/w55s_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave55k_kkt_sqp_sweep:
+    needs: consolidate_w55_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 55K 16-Core Full-Frontier KKT `newton_finish` + SQP Hessian Sweep + Shrink-Hop!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w55.tar
+          mkdir -p "artifacts/w55k_${SHARD_ID}" /tmp/sq_w55_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w55_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w55_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w55_ds/
+          export SQ_DS_DIR="/tmp/sq_w55_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          timeout -s KILL 2380s python3 -u squares_math/workers/w55k_kkt_sqp_finish_sweep.py \
+            --union-npz /tmp/sq_w55_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w55_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 4 --procs 4 --budget-sec 2220 \
+            --seed-off 650000 \
+            --out-npz "artifacts/w55k_${SHARD_ID}/w55k_kkt_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w55k_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w55k-${{ matrix.shard }}
+          path: artifacts/w55k_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
