@@ -1,0 +1,192 @@
+name: "Squares Math Wave 50 TRUE ETA<=0.28 WIDER-HOPPER + EXHAUSTIVE PRIVATE DEL-1 MAP (80c W50D Private n+1->n Map + 48c W50F Sub-0.016 GPeel + 32c W50P Private Records = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w50"
+        type: string
+      w49_run_id:
+        required: false
+        default: "46024502364"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w50_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W49 megapool + W49 wins (<60s ultra-fast bundle!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w49_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w49-megapool-bundle" -D .
+          tar -xf megapool_w49.tar
+          rm -f megapool_w49.tar
+          mkdir -p pool/wins/pub_seeds pool/wins/w49k pool/wins/w49a pool/wins/w49f pool/wins/w49e
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w49_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w49-w49k-*" -D pool/wins/w49k || true
+          gh run download "${{ inputs.w49_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w49-w49a-*" -D pool/wins/w49a || true
+          gh run download "${{ inputs.w49_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w49-w49f-*" -D pool/wins/w49f || true
+          gh run download "${{ inputs.w49_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w49-w49e-*" -D pool/wins/w49e || true
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w50.tar pool/wins
+          ls -lh megapool_w50.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w50.tar
+          retention-days: 7
+
+  wave50d_exhaustive_private_del1:
+    needs: consolidate_w50_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 50D 80-Core Exhaustive Near-Band Delete-1 Map -> 4-Seed True eta<=0.28 Wider-Hopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w50.tar
+          mkdir -p "artifacts/w50d_${SHARD_ID}" /tmp/sq_w50_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w50_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w50_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/seeds/goodpjw_targets_public.csv" /tmp/sq_w50_ds/goodpjw_targets_public.csv
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w50_ds/
+          export SQ_DS_DIR="/tmp/sq_w50_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w50d_exhaustive_private_del1_widehopper.py \
+            --union-npz /tmp/sq_w50_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w50_ds/frontier_targets_public.json \
+            --targets-csv /tmp/sq_w50_ds/goodpjw_targets_public.csv \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 2300 \
+            --r1-sec 210 --r2-sec 170 --max-puzzles 120 --seed-off 500000 \
+            --out-npz "artifacts/w50d_${SHARD_ID}/w50d_del1wh_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w50d_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w50d-${{ matrix.shard }}
+          path: artifacts/w50d_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave50f_gpeel_true_widehopper:
+    needs: consolidate_w50_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 50F 48-Core Sub-0.016 GPeel & Transplants -> 4-Seed True eta<=0.28 Wider-Hopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w50.tar
+          mkdir -p "artifacts/w50f_${SHARD_ID}" /tmp/sq_w50_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w50_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w50_ds/
+          export SQ_DS_DIR="/tmp/sq_w50_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w50f_gpeel_true_widehopper_multiseed.py \
+            --union-npz /tmp/sq_w50_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 --budget-sec 2300 \
+            --r1-sec 190 --r2-sec 160 --max-gap 0.016 --seed-off 504000 \
+            --out-npz "artifacts/w50f_${SHARD_ID}/w50f_gpwh_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w50f_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w50f-${{ matrix.shard }}
+          path: artifacts/w50f_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave50p_private_records_widehopper:
+    needs: consolidate_w50_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 50P 32-Core Private/Recent Records -> 4-Seed True eta<=0.28 Wider-Hopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w50.tar
+          mkdir -p "artifacts/w50p_${SHARD_ID}" /tmp/sq_w50_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w50_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w50_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w50_ds/
+          export SQ_DS_DIR="/tmp/sq_w50_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w50p_private_records_true_widehopper.py \
+            --union-npz /tmp/sq_w50_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w50_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2300 \
+            --r1-sec 220 --r2-sec 180 --max-targets 72 --seed-off 508000 \
+            --out-npz "artifacts/w50p_${SHARD_ID}/w50p_privwh_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w50p_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w50p-${{ matrix.shard }}
+          path: artifacts/w50p_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7

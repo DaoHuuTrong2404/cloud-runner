@@ -1417,21 +1417,21 @@ class Hopper:
         i0 = rng.choice(len(P), p=self.w / self.w.sum())
         c0 = P[i0, :2] + rng.normal(0, 0.4, 2)
         is_wide = self.wide and (rng.random() < 0.5)
-        rho = rng.uniform(1.8, 3.6) if is_wide else rng.uniform(1.0, 2.3)
+        rho = rng.uniform(1.8, 3.9) if is_wide else rng.uniform(1.0, 2.3)
         max_cl = 18 if is_wide else 9
         d = np.hypot(P[:, 0] - c0[0], P[:, 1] - c0[1])
         cluster = np.where((d < rho) & self.loose)[0]
         if len(cluster) == 0 or len(cluster) > max_cl:
             return False
         near = np.where(d < rho + 1.5)[0]
-        ring = np.where((d >= rho + 1.5) & (d < rho + 3.9))[0]
+        ring = np.where((d >= rho + 1.5) & (d < rho + (4.5 if is_wide else 3.9)))[0]
         sub = np.concatenate([near, ring])
         free = np.zeros(len(sub), np.bool_)
         free[: len(near)] = self.loose[near] | (d[near] < rho)
         Q = P.copy()
-        room = rng.random() < 0.6
+        room = rng.random() < 0.65 if is_wide else (rng.random() < 0.6)
         if room:
-            eta = rng.uniform(0.03, 0.12)
+            eta = rng.uniform(0.04, 0.28) if is_wide else rng.uniform(0.03, 0.12)
             axis = int(rng.integers(2))
             up = self.cen[C.body, axis] > c0[axis] + rng.uniform(-1.0, 1.0)
             Q[up, axis] += eta
@@ -1449,7 +1449,7 @@ class Hopper:
             else:
                 Q[i, 2] = rng.uniform(-0.78, 0.78)
         t = time.perf_counter()
-        rel_it = 360 if is_wide else 250
+        rel_it = 420 if is_wide else 250
         R, E = relax(Q[sub], free, S + (eta if room else 0.0) + 1e-9, rel_it, 1e-16)
         if E <= 1e-14 and room:
             Q[near] = R[: len(near)]
