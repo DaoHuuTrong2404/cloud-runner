@@ -73,13 +73,13 @@ def warm_numba():
 
 
 def run_stock_hopper_chain(
-    P_start, seed_base, first_sec=220, cascade_sec=160, max_cascades=3
+    P_start, seed_base, first_sec=220, cascade_sec=160, max_cascades=3, wide=True
 ):
     best_P = E.to_origin(P_start)
     best_S = float(E.side(best_P))
     start_S = best_S
     try:
-        H = E.Hopper(best_P, seed=seed_base)
+        H = E.Hopper(best_P, seed=seed_base, wide=wide)
         if not H.applicable():
             return best_P, best_S, 0
         Q, S = H.run(first_sec)
@@ -113,7 +113,7 @@ def run_stock_hopper_chain(
             except Exception:
                 pass
             try:
-                H2 = E.Hopper(best_P, seed=seed_base + (c + 1) * 1009)
+                H2 = E.Hopper(best_P, seed=seed_base + (c + 1) * 1009, wide=wide)
                 if not H2.applicable():
                     break
                 Q2, S2 = H2.run(cascade_sec)
