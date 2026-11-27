@@ -1,0 +1,64 @@
+name: "Squares Math Wave 58 LIGHTNING 96-Core Escalation on Fresh Pub v15 (`n=491,556,707`)!"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w58"
+        type: string
+      w57_run_id:
+        required: true
+        default: "46080507430"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  wave58p_pub_escalator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - name: Run Wave 58P 96-Core 17m Escalation on Fresh Pub v15 Wins (`491,556,707`)!
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          gh run download "${{ inputs.w57_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w57-megapool-bundle" -D .
+          tar -xf megapool_w57.tar
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          mkdir -p "artifacts/w58p_${SHARD_ID}" /tmp/sq_w58_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w58_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w58_ds/
+          export SQ_DS_DIR="/tmp/sq_w58_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          timeout -s KILL 1120s python3 -u squares_math/workers/w58p_fresh_pub_escalator.py \
+            --union-npz /tmp/sq_w58_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --pub-v15-npz squares_math/seeds/pub_v15_public_wins.npz \
+            --shard "$SHARD_ID" --num-shards 24 --procs 4 --budget-sec 1020 \
+            --seed-off 810000 \
+            --out-npz "artifacts/w58p_${SHARD_ID}/w58p_esc_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w58p_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w58p-${{ matrix.shard }}
+          path: artifacts/w58p_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
