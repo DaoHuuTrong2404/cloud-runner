@@ -1,0 +1,195 @@
+name: "Squares Math Wave 53 CC-BAR REHARDEN SPLICER + NAKAJIMA SOFT-INSERT/UNJAMMER + RECT-GADGET 8-SYM DP (80c W53S + 48c W53H + 32c W53G = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w53"
+        type: string
+      w52_run_id:
+        required: false
+        default: "46053610589"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w53_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W52 megapool + W52 wins (<60s ultra-fast bundle!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w52_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w52-megapool-bundle" -D .
+          tar -xf megapool_w52.tar
+          rm -f megapool_w52.tar
+          mkdir -p pool/wins/pub_seeds pool/wins/w52s pool/wins/w52i pool/wins/w52f
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w52_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w52-w52s-*" -D pool/wins/w52s || true
+          gh run download "${{ inputs.w52_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w52-w52i-*" -D pool/wins/w52i || true
+          gh run download "${{ inputs.w52_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w52-w52f-*" -D pool/wins/w52f || true
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w53.tar pool/wins
+          ls -lh megapool_w53.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w53.tar
+          retention-days: 7
+
+  wave53s_ccbar_reharden_splicer:
+    needs: consolidate_w53_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 53S 80-Core CC-Bar Pocket Splicer + Rust Harden Reharden -> 3R Wider-Hopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w53.tar
+          mkdir -p "artifacts/w53s_${SHARD_ID}" /tmp/sq_w53_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin harden)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/harden" /tmp/sq_bins/harden
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w53_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w53_ds/
+          export SQ_DS_DIR="/tmp/sq_w53_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          timeout -s KILL 2380s python3 -u squares_math/workers/w53s_ccbar_reharden_splicer.py \
+            --union-npz /tmp/sq_w53_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 2220 \
+            --r1-sec 200 --r2-sec 180 --r3-sec 190 --seed-off 550000 \
+            --out-npz "artifacts/w53s_${SHARD_ID}/w53s_ccbar_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w53s_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w53s-${{ matrix.shard }}
+          path: artifacts/w53s_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave53h_nakajima_reharden:
+    needs: consolidate_w53_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 53H 48-Core Nakajima/Ostashev Soft-to-Rigid Reharden + Soft Inserter -> 3R Wider-Hopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w53.tar
+          mkdir -p "artifacts/w53h_${SHARD_ID}" /tmp/sq_w53_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin harden)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/harden" /tmp/sq_bins/harden
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w53_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w53_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w53_ds/
+          export SQ_DS_DIR="/tmp/sq_w53_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          timeout -s KILL 2380s python3 -u squares_math/workers/w53h_nakajima_reharden_and_softinsert.py \
+            --union-npz /tmp/sq_w53_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w53_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 --budget-sec 2220 \
+            --r1-sec 200 --r2-sec 180 --r3-sec 190 --max-puzzles 84 --seed-off 560000 \
+            --out-npz "artifacts/w53h_${SHARD_ID}/w53h_rehard_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w53h_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w53h-${{ matrix.shard }}
+          path: artifacts/w53h_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave53g_rect_quench_faultdp:
+    needs: consolidate_w53_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 53G 32-Core Rectangle-Mode FQ Gadget Quencher + 8-Sym Fault-DP -> 3R Wider-Hopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w53.tar
+          mkdir -p "artifacts/w53g_${SHARD_ID}" /tmp/sq_w53_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin harden)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/harden" /tmp/sq_bins/harden
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w53_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w53_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w53_ds/
+          export SQ_DS_DIR="/tmp/sq_w53_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          timeout -s KILL 2380s python3 -u squares_math/workers/w53g_rect_quench_8sym_faultdp.py \
+            --union-npz /tmp/sq_w53_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w53_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2220 \
+            --r1-sec 200 --r2-sec 180 --r3-sec 190 --seed-off 570000 \
+            --out-npz "artifacts/w53g_${SHARD_ID}/w53g_rgdp_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w53g_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w53g-${{ matrix.shard }}
+          path: artifacts/w53g_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7

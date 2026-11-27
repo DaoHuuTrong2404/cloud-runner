@@ -113,7 +113,7 @@ def wall_slack(p, unit=1e-7):
         b_ub=np.concatenate(slack),
         bounds=[(-1.0, 1.0)] * (2 * n) + [(0.0, 2.0)],
         method="highs",
-        options={"threads": 1},
+        options={"threads": 1, "time_limit": 5.0},
     )
     if not res.success or res.x is None or res.x[-1] < 1e-4:
         return p
