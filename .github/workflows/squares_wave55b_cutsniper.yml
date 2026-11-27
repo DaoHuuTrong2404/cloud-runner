@@ -1,0 +1,66 @@
+name: "Squares Math Wave 55B HOTFIX 48-Core Cut-Sniper (`418 +3e-6`, `652 +0.0`, `756 +7e-6`, `871 +3.8e-5`!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w55b"
+        type: string
+      w55_run_id:
+        required: true
+        default: "46071099976"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  wave55b_cutsniper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 42
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - name: Download w55-megapool-bundle & run 48-Core Cut-Sniper (`1850s` budget -> synced with Wave 55)!
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          gh run download "${{ inputs.w55_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w55-megapool-bundle" -D .
+          tar -xf megapool_w55.tar
+          mkdir -p "artifacts/w55b_${SHARD_ID}" /tmp/sq_w55b_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin harden)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/harden" /tmp/sq_bins/harden
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w55b_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w55b_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w55b_ds/
+          export SQ_DS_DIR="/tmp/sq_w55b_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          timeout -s KILL 1980s python3 -u squares_math/workers/w55s_ultrasniper_cuts_and_bandflip.py \
+            --union-npz /tmp/sq_w55b_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w55b_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 1840 \
+            --seed-off 665000 \
+            --out-npz "artifacts/w55b_${SHARD_ID}/w55b_cut_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w55b_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w55b-${{ matrix.shard }}
+          path: artifacts/w55b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7

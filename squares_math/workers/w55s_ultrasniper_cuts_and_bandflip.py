@@ -55,21 +55,18 @@ import w54s_fast_stag_splicer_and_sniper as w54s
 # 12 Cut-Sniper shards x 2 pairs/shard = 24 ultra-hot cut targets!
 # (want_n == 0 means take the sharpest cut of any target size produced by donor_n)
 SNIPER_CUT_SLOTS = [
-    [(418, 461), (652, 705)],  # s0: +3e-6!! & +2.9e-4
-    [(756, 813), (929, 992)],  # s1: +7e-6!! & +3.0e-4
-    [(924, 987), (376, 417)],  # s2: +1.0e-5!! & +3.2e-4
-    [(465, 510), (863, 987)],  # s3: +3.6e-5!! & +3.6e-4
-    [(418, 461), (0, 380)],  # s4: 2nd seed on 418<-461 (+3e-6!) + fresh R33 winner 380!
-    [(756, 813), (0, 702)],  # s5: 2nd seed on 756<-813 (+7e-6!) + fresh R33 winner 702!
-    [
-        (924, 987),
-        (0, 758),
-    ],  # s6: 2nd seed on 924<-987 (+1.0e-5!) + fresh R33 winner 758!
-    [(465, 510), (871, 928)],  # s7: 2nd seed on 465<-510 (+3.6e-5!) + 871<-928
-    [(701, 813), (597, 649)],  # s8: +1.0e-4 & 597<-649
-    [(754, 811), (752, 807)],  # s9: +1.46e-4 & 752<-807
-    [(549, 598), (504, 552)],  # s10: +2.11e-4 & 504<-552
-    [(689, 744), (760, 816)],  # s11: +2.32e-4 & 760<-816
+    [(418, 461), (652, 705)],
+    [(756, 813), (871, 932)],
+    [(924, 987), (754, 811)],
+    [(465, 510), (811, 931)],
+    [(418, 461), (0, 380)],
+    [(756, 813), (0, 702)],
+    [(652, 705), (0, 758)],
+    [(924, 987), (870, 931)],
+    [(465, 510), (812, 932)],
+    [(701, 813), (929, 992)],
+    [(549, 598), (376, 417)],
+    [(689, 744), (377, 461)],
 ]
 
 
@@ -171,34 +168,22 @@ def collect_sniper_cuts(ex, want_n, donor_n, P_donor, cur_L_map, bseed):
                         break
                 if len(raw_jobs) >= 12:
                     break
-            for wh in (26, 27, 28, 29):
-                for kp in range(2, len(bp) - 2, max(1, (len(bp) - 4) // 3)):
-                    for kn in range(2, len(bn) - 2, max(1, (len(bn) - 4) // 3)):
-                        P_tb = w52s.splice_two_bands(
-                            P,
-                            bp,
-                            bn,
-                            ip[0],
-                            ineg[0],
-                            kp,
-                            kn,
-                            n_del_p=1,
-                            n_del_n=1,
-                            wall_h_num=wh,
-                        )
-                        if P_tb is not None and len(P_tb) in (want_n, want_n + 1):
-                            raw_jobs.append(
-                                (
-                                    f"snipetb_{donor_n}_k{kp}x{kn}_w{wh}",
-                                    w54s.relocate_crushed_fast(P_tb),
-                                    cur_L_map.get(
-                                        len(P_tb), math.sqrt(len(P_tb)) + 0.6
-                                    ),
-                                    bseed + 500 + wh * 17 + kp,
-                                )
+            for kp in range(2, len(bp) - 2):
+                for kn in range(2, len(bn) - 2):
+                    P_tb = w52s.cut_two_band_staggered(P, ip, ineg, kp, kn)
+                    if P_tb is not None and len(P_tb) in (want_n, want_n + 1):
+                        raw_jobs.append(
+                            (
+                                f"snipetb_{donor_n}_k{kp}x{kn}",
+                                w54s.relocate_crushed_fast(P_tb),
+                                cur_L_map.get(len(P_tb), math.sqrt(len(P_tb)) + 0.6),
+                                bseed + 500 + kp * 29 + kn,
                             )
-                        if len(raw_jobs) >= 20:
-                            break
+                        )
+                    if len(raw_jobs) >= 20:
+                        break
+                if len(raw_jobs) >= 20:
+                    break
         if raw_jobs:
             futs = [ex.submit(eval_raw_cut_multi, jb) for jb in raw_jobs[:16]]
             try:
