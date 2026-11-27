@@ -50,19 +50,62 @@ import w32a_fresh_basin_fast_hopper as w32a
 
 def _try_transplant_one(args_tuple):
     src_n, P, up = args_tuple
+    out_list = []
     try:
         out = E.transplant(P, up)
         if out is None:
-            return None
+            return out_list
         Q, S, _, _ = out
         n_new = int(len(Q))
-        if not (80 <= n_new <= 1000):
-            return None
-        if E.min_gap(Q) < -1e-8:
-            return None
-        return (n_new, float(S), src_n, up, Q.astype(np.float64))
+        if (80 <= n_new <= 1000) and E.min_gap(Q) >= -1e-8:
+            out_list.append(
+                (
+                    n_new,
+                    float(S),
+                    f"tp1_{src_n}_{'u' if up else 'd'}",
+                    Q.astype(np.float64),
+                )
+            )
+            # Bonus 1: Transplant + Delete-1 (instant soft design for n_new - 1!)
+            if n_new - 1 >= 80:
+                try:
+                    cands = w32a.pick_near_band(Q, max_cand=12)
+                    best_d = None
+                    for idx in cands[:6]:
+                        Qd, Sd = w32a.fast_delete_and_compact(Q, idx)
+                        if Qd is not None and (best_d is None or Sd < best_d[0]):
+                            best_d = (Sd, idx, Qd)
+                    if best_d is not None:
+                        out_list.append(
+                            (
+                                n_new - 1,
+                                float(best_d[0]),
+                                f"tpd1_{src_n}_{'u' if up else 'd'}",
+                                best_d[2].astype(np.float64),
+                            )
+                        )
+                except Exception:
+                    pass
+            # Bonus 2: 2-step chained Bar-Transplant ((m, j) -> (m+-2, j+-4)!)
+            try:
+                out2 = E.transplant(Q, up)
+                if out2 is not None:
+                    Q2, S2, _, _ = out2
+                    n2 = int(len(Q2))
+                    if (80 <= n2 <= 1000) and E.min_gap(Q2) >= -1e-8:
+                        out_list.append(
+                            (
+                                n2,
+                                float(S2),
+                                f"tp2_{src_n}_{'u' if up else 'd'}",
+                                Q2.astype(np.float64),
+                            )
+                        )
+            except Exception:
+                pass
     except Exception:
-        return None
+        pass
+    return out_list
 
 
 def worker_wide_hopper_polish(job):
@@ -172,19 +215,17 @@ def main():
     my_srcs = srcs[args.shard :: args.num_shards]
     tp_tasks = [(n, cur[n][1], up) for n in my_srcs for up in (True, False)]
 
-    tp_cands = []  # (gap, n_new, S, src_n, up, Q)
+    tp_cands = []  # (gap, n_new, S, tag, Q)
     with ProcessPoolExecutor(max_workers=args.procs) as ex:
-        for res in ex.map(_try_transplant_one, tp_tasks):
-            if res is None:
-                continue
-            n_new, S, src_n, up, Q = res
-            gap = S - cur[n_new][0]
-            if gap < 0.0085:
-                tp_cands.append((gap, n_new, S, src_n, up, Q))
+        for res_list in ex.map(_try_transplant_one, tp_tasks):
+            for n_new, S, tag, Q in res_list:
+                gap = S - cur[n_new][0]
+                if gap < 0.018:
+                    tp_cands.append((gap, n_new, S, tag, Q))
     tp_cands.sort(key=lambda z: z[0])
     print(
-        f"[W42F-Transplant+WideHop s={args.shard}/{args.num_shards}] score={tot_score:.10f} "
-        f"swept={len(tp_tasks)} transplants -> promising={len(tp_cands)} "
+        f"[W42F-SuperTransplant+WideHop s={args.shard}/{args.num_shards}] score={tot_score:.10f} "
+        f"swept={len(tp_tasks)} 1+2-step+del1 transplants -> promising={len(tp_cands)} "
         f"(direct_wins={sum(1 for z in tp_cands if z[0] < -1e-7)}) ({time.time() - t0:.1f}s)",
         flush=True,
     )
@@ -193,11 +234,10 @@ def main():
     deadline = t0 + args.budget_sec
     jobs = []
     seen_tp_n = set()
-    for i, (gap, n_new, S, src_n, up, Q) in enumerate(tp_cands):
+    for i, (gap, n_new, S, tag, Q) in enumerate(tp_cands):
         if n_new in seen_tp_n:
             continue
         seen_tp_n.add(n_new)
-        tag = f"tp_{src_n}_{'up' if up else 'dn'}"
         jobs.append(
             (
                 n_new,
