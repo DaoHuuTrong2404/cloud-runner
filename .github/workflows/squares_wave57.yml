@@ -1,0 +1,141 @@
+name: "Squares Math Wave 57 EXACT-N INEXACT LCUT + BIDIRECTIONAL PITCH STRETCH & LBAND2 SPLIT-MILP (88c W57L + 72c W57T = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w57"
+        type: string
+      w56_run_id:
+        required: true
+        default: "46076151884"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w57_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W56 megapool + W56 wins (<60s ultra-fast bundle!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w56_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w56-megapool-bundle" -D .
+          tar -xf megapool_w56.tar
+          rm -f megapool_w56.tar
+          mkdir -p pool/wins/pub_seeds pool/wins/w56g pool/wins/w56f
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w56_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w56-w56g-*" -D pool/wins/w56g || true
+          gh run download "${{ inputs.w56_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w56-w56f-*" -D pool/wins/w56f || true
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w57.tar pool/wins
+          ls -lh megapool_w57.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w57.tar
+          retention-days: 7
+
+  wave57l_inexact_lcut:
+    needs: consolidate_w57_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 36
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 57L 88-Core Exact-N Inexact L-Cut (`lcut.py`) + KKT Wider-Hopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w57.tar
+          mkdir -p "artifacts/w57l_${SHARD_ID}" /tmp/sq_w57_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w57_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w57_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w57_ds/
+          export SQ_DS_DIR="/tmp/sq_w57_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          timeout -s KILL 1820s python3 -u squares_math/workers/w57l_inexact_lcut_exact_n.py \
+            --union-npz /tmp/sq_w57_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w57_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 22 --procs 4 --budget-sec 1700 \
+            --r1-sec 215 --r2-sec 195 --r3-sec 195 --seed-off 760000 \
+            --out-npz "artifacts/w57l_${SHARD_ID}/w57l_lcut_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w57l_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w57l-${{ matrix.shard }}
+          path: artifacts/w57l_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave57t_stretch_and_lband2:
+    needs: consolidate_w57_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 36
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 57T 72-Core Pitch-Stretch (`stretch.py`) & `lband2` Split-MILP + KKT Hopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w57.tar
+          mkdir -p "artifacts/w57t_${SHARD_ID}" /tmp/sq_w57_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w57_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w57_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w57_ds/
+          export SQ_DS_DIR="/tmp/sq_w57_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          timeout -s KILL 1820s python3 -u squares_math/workers/w57t_pitch_stretch_and_lband2_milp.py \
+            --union-npz /tmp/sq_w57_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w57_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 18 --procs 4 --budget-sec 1700 \
+            --r1-sec 215 --r2-sec 195 --r3-sec 195 --seed-off 780000 \
+            --out-npz "artifacts/w57t_${SHARD_ID}/w57t_stlb_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w57t_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w57t-${{ matrix.shard }}
+          path: artifacts/w57t_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
