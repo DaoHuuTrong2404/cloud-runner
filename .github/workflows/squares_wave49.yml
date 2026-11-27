@@ -1,0 +1,255 @@
+name: "Squares Math Wave 49 DIAGONAL STAIRCASE SPLICER + FAULT-OPEN GLOBAL SA-UNWELDED (48c W49K K2+1 Staircase + 64c W49A 4-Basin FaultOpenSA + 32c W49F GPeel->FaultOpenSA + 16c DP = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w49"
+        type: string
+      w48_run_id:
+        required: false
+        default: "46001974825"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w49_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy numba
+      - name: Consolidate W48 megapool + W48 wins + 133KB W48 gadgets & Precompute 18-bucket Numba DP Cache!
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w48_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w48-megapool-bundle" -D .
+          tar -xf megapool_w48.tar
+          rm -f megapool_w48.tar pool/dp_cache.npz
+          mkdir -p pool/wins/pub_seeds pool/wins/w48a pool/wins/w48f pool/wins/w48e pool/gadgets/g48 /tmp/sq_w49_ds
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w48_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w48-w48a-*" -D pool/wins/w48a || true
+          gh run download "${{ inputs.w48_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w48-w48f-*" -D pool/wins/w48f || true
+          gh run download "${{ inputs.w48_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w48-w48e-*" -D pool/wins/w48e || true
+          gh run download "${{ inputs.w48_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w48-w48b-*" -D pool/gadgets/g48 || true
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w49_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w49_ds/
+          export SQ_DS_DIR="/tmp/sq_w49_ds"
+          python3 -u squares_math/workers/precompute_dp_cache.py \
+            --union-npz /tmp/sq_w49_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --gadget-glob "pool/gadgets/**/*.npz" \
+            --procs 4 --fmax 0.992 \
+            --out-cache pool/dp_cache.npz
+          ls -lh pool/dp_cache.npz
+          tar -cf megapool_w49.tar pool
+          ls -lh megapool_w49.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w49.tar
+          retention-days: 7
+
+  wave49k_diagonal_staircase_splicer:
+    needs: consolidate_w49_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 49K 48-Core Diagonal Staircase (p*V4 + q*V5 + r*V1) Splicer -> FaultOpenSA!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w49.tar
+          mkdir -p "artifacts/w49k_${SHARD_ID}" /tmp/sq_w49_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w49_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w49_ds/
+          export SQ_DS_DIR="/tmp/sq_w49_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w49k_diagonal_staircase_splicer.py \
+            --union-npz /tmp/sq_w49_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --shard "$SHARD_ID" --num-shards 12 --procs 4 --budget-sec 2300 \
+            --sa-sec 120 --quench-sec 80 --wide-sec 50 --seed-off 494000 \
+            --out-npz "artifacts/w49k_${SHARD_ID}/w49k_stair_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w49k_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w49k-${{ matrix.shard }}
+          path: artifacts/w49k_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave49a_fault_open_sa_top96_donors:
+    needs: consolidate_w49_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 49A 64-Core 4-Basin Cross-Topology Donors + Fault-Open Global SA-Unwelded!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w49.tar
+          mkdir -p "artifacts/w49a_${SHARD_ID}" /tmp/sq_w49_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w49_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w49_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/seeds/goodpjw_targets_public.csv" /tmp/sq_w49_ds/goodpjw_targets_public.csv
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w49_ds/
+          export SQ_DS_DIR="/tmp/sq_w49_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w49_fault_open_sa_engine.py \
+            --union-npz /tmp/sq_w49_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w49_ds/frontier_targets_public.json \
+            --targets-csv /tmp/sq_w49_ds/goodpjw_targets_public.csv \
+            --shard "$SHARD_ID" --num-shards 16 --procs 4 --budget-sec 2300 \
+            --sa-sec 105 --quench-sec 70 --wide-sec 45 --max-targets 96 --seed-off 490000 \
+            --out-npz "artifacts/w49a_${SHARD_ID}/w49a_fopsa_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w49a_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w49a-${{ matrix.shard }}
+          path: artifacts/w49a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave49f_gpeel_fault_open_sa:
+    needs: consolidate_w49_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 49F 32-Core 83x GPeel + Transplants -> Fault-Open Global SA-Unwelded!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w49.tar
+          mkdir -p "artifacts/w49f_${SHARD_ID}" /tmp/sq_w49_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w49_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w49_ds/
+          export SQ_DS_DIR="/tmp/sq_w49_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w49f_gpeel_fault_open_sa.py \
+            --union-npz /tmp/sq_w49_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2300 \
+            --sa-sec 100 --quench-sec 70 --wide-sec 45 --max-gap 0.024 --seed-off 498000 \
+            --out-npz "artifacts/w49f_${SHARD_ID}/w49f_gpfop_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w49f_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w49f-${{ matrix.shard }}
+          path: artifacts/w49f_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave49e_dp_wide_hopper_hybrid:
+    needs: consolidate_w49_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 49E 16-Core 18-Bucket 4D-DP -> Wider-Move Hopper (Detonating 133KB W48 Gadgets!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w49.tar
+          mkdir -p "artifacts/w49e_${SHARD_ID}" /tmp/sq_w49_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w49_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w49_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w49_ds/
+          export SQ_DS_DIR="/tmp/sq_w49_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w39e_dp_hopper_hybrid.py \
+            --dp-cache pool/dp_cache.npz \
+            --lags-json /tmp/sq_w49_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 4 --procs 4 --budget-sec 2350 --hop-sec 95 \
+            --seed-off 490000 --max-cands 220 \
+            --out-npz "artifacts/w49e_${SHARD_ID}/w49e_dpwhop_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w49e_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w49e-${{ matrix.shard }}
+          path: artifacts/w49e_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
