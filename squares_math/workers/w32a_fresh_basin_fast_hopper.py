@@ -308,17 +308,29 @@ def main():
     front_rows = json.load(open(args.frontier_json))
     front_L = {int(r["n"]): float(r["L_front"]) for r in front_rows}
 
-    # VIP fresh basins (W39 breakthroughs 785/678/731/786/548/910/862/595/851/962 + W38 298/264/995 + neighbors!)
+    # VIP fresh basins (pub_v8 goodpjw 545/556/698 + W40 816/603/548/842/901 + W39 785/678/731/786/910/862!)
     vip_seeds = [
+        545,
+        544,
+        546,
+        556,
+        555,
+        698,
+        697,
+        816,
+        815,
+        817,
         785,
         784,
         786,
+        603,
+        602,
+        548,
+        547,
         678,
         677,
         731,
         730,
-        548,
-        547,
         910,
         909,
         862,
@@ -329,8 +341,6 @@ def main():
         850,
         962,
         963,
-        603,
-        602,
         298,
         297,
         264,
