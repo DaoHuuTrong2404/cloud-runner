@@ -1,0 +1,286 @@
+name: "Squares Math Wave 48 SIMULATED-ANNEALING UNWELDED MEGA-HOPPER + 83x GPEEL (64c W48F GPeel->SAUnwelded + 64c W48A Top96/Targets->SAUnwelded + 16c DP->WideHop + 16c Forge = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w48"
+        type: string
+      w47_run_id:
+        required: false
+        default: "45991118086"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w48_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy numba
+      - name: Consolidate W47 megapool + W47 wins + 191KB W47 gadgets & Precompute 18-bucket Numba DP Cache ONCE!
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w47_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w47-megapool-bundle" -D .
+          tar -xf megapool_w47.tar
+          rm -f megapool_w47.tar pool/dp_cache.npz
+          mkdir -p pool/wins/pub_seeds pool/wins/w47m pool/wins/w47s pool/wins/w47e pool/gadgets/g47 /tmp/sq_w48_ds
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w47_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w47-w47m-*" -D pool/wins/w47m || true
+          gh run download "${{ inputs.w47_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w47-w47s-*" -D pool/wins/w47s || true
+          gh run download "${{ inputs.w47_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w47-w47e-*" -D pool/wins/w47e || true
+          gh run download "${{ inputs.w47_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w47-w47b-*" -D pool/gadgets/g47 || true
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w48_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w48_ds/
+          export SQ_DS_DIR="/tmp/sq_w48_ds"
+          python3 -u squares_math/workers/precompute_dp_cache.py \
+            --union-npz /tmp/sq_w48_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --gadget-glob "pool/gadgets/**/*.npz" \
+            --procs 4 --fmax 0.992 \
+            --out-cache pool/dp_cache.npz
+          ls -lh pool/dp_cache.npz
+          tar -cf megapool_w48.tar pool
+          ls -lh megapool_w48.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w48.tar
+          retention-days: 7
+
+  wave48f_gpeel_sa_unwelded:
+    needs: consolidate_w48_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 48F 64-Core 83x GPeel + 1/2/3-Step Transplants -> SA-Unwelded-MegaHopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w48.tar
+          mkdir -p "artifacts/w48f_${SHARD_ID}" /tmp/sq_w48_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w48_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w48_ds/
+          export SQ_DS_DIR="/tmp/sq_w48_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w48f_gpeel_sa_unwelded.py \
+            --union-npz /tmp/sq_w48_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --shard "$SHARD_ID" --num-shards 16 --procs 4 --budget-sec 2300 \
+            --sa-sec 95 --quench-sec 75 --wide-sec 55 --max-gap 0.026 --seed-off 485000 \
+            --out-npz "artifacts/w48f_${SHARD_ID}/w48f_gpsau_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w48f_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w48f-${{ matrix.shard }}
+          path: artifacts/w48f_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave48a_sa_unwelded_top96_and_targets:
+    needs: consolidate_w48_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 48A 64-Core SA-Unwelded-MegaHopper on Top-96 Gaps + goodpjw Near-Miss Holes!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w48.tar
+          mkdir -p "artifacts/w48a_${SHARD_ID}" /tmp/sq_w48_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w48_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w48_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/seeds/goodpjw_targets_public.csv" /tmp/sq_w48_ds/goodpjw_targets_public.csv
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w48_ds/
+          export SQ_DS_DIR="/tmp/sq_w48_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w48a_sa_unwelded_engine.py \
+            --union-npz /tmp/sq_w48_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w48_ds/frontier_targets_public.json \
+            --targets-csv /tmp/sq_w48_ds/goodpjw_targets_public.csv \
+            --shard "$SHARD_ID" --num-shards 16 --procs 4 --budget-sec 2300 \
+            --sa-sec 120 --quench-sec 90 --wide-sec 60 --max-targets 96 --seed-off 480000 \
+            --out-npz "artifacts/w48a_${SHARD_ID}/w48a_saum_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w48a_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w48a-${{ matrix.shard }}
+          path: artifacts/w48a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave48e_dp_wide_hopper_hybrid:
+    needs: consolidate_w48_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 48E 16-Core 18-Bucket 4D-DP -> Wider-Move Hopper (Detonating 191KB W47 Gadgets!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w48.tar
+          mkdir -p "artifacts/w48e_${SHARD_ID}" /tmp/sq_w48_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w48_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w48_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w48_ds/
+          export SQ_DS_DIR="/tmp/sq_w48_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w39e_dp_hopper_hybrid.py \
+            --dp-cache pool/dp_cache.npz \
+            --lags-json /tmp/sq_w48_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 4 --procs 4 --budget-sec 2350 --hop-sec 85 \
+            --seed-off 480000 --max-cands 220 \
+            --out-npz "artifacts/w48e_${SHARD_ID}/w48e_dpwhop_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w48e_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w48e-${{ matrix.shard }}
+          path: artifacts/w48e_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave48b_gadget_forge:
+    needs: consolidate_w48_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 48B 16-Core WideHop Single/Pair + FQ Gadget Forge!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w48.tar
+          mkdir -p "artifacts/w48b_${SHARD_ID}" /tmp/sq_w48_ds /tmp/sq_bins
+          if [ "$SHARD_ID" -eq 2 ]; then
+            (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          else
+            (cd squares_math/fq_crate && cargo build --release --bin fq)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          fi
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w48_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w48_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w48_ds/
+          export SQ_DS_DIR="/tmp/sq_w48_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          if [ "$SHARD_ID" -eq 0 ]; then
+            python3 -u squares_math/workers/w36b_hopper_gadget_surgery.py \
+              --union-npz /tmp/sq_w48_ds/pub_base_v5.npz \
+              --dp-cache pool/dp_cache.npz \
+              --lags-json /tmp/sq_w48_ds/lag_targets.json \
+              --mode single --shard 0 --num-shards 1 --procs 4 --budget-sec 2250 --hop-sec 70 --seed-off 480000 \
+              --out-npz "artifacts/w48b_${SHARD_ID}/g48_whop_single_s0.npz"
+          elif [ "$SHARD_ID" -eq 1 ]; then
+            python3 -u squares_math/workers/w36b_hopper_gadget_surgery.py \
+              --union-npz /tmp/sq_w48_ds/pub_base_v5.npz \
+              --dp-cache pool/dp_cache.npz \
+              --lags-json /tmp/sq_w48_ds/lag_targets.json \
+              --mode pairs --shard 0 --num-shards 1 --procs 4 --budget-sec 2250 --hop-sec 70 --seed-off 485000 \
+              --out-npz "artifacts/w48b_${SHARD_ID}/g48_whop_pair_s0.npz"
+          elif [ "$SHARD_ID" -eq 2 ]; then
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w48_ds/pub_base_v5.npz \
+              --dp-cache pool/dp_cache.npz \
+              --lags-json /tmp/sq_w48_ds/lag_targets.json \
+              --mode bottleneck_shrink --shard 0 --num-shards 1 --procs 4 --budget-sec 2400 --seed-off 48000 \
+              --out-npz "artifacts/w48b_${SHARD_ID}/g48_bn_shrink_s0.npz"
+          else
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w48_ds/pub_base_v5.npz \
+              --dp-cache pool/dp_cache.npz \
+              --lags-json /tmp/sq_w48_ds/lag_targets.json \
+              --mode bottleneck_grow --shard 0 --num-shards 1 --procs 4 --budget-sec 2400 --seed-off 48000 \
+              --out-npz "artifacts/w48b_${SHARD_ID}/g48_bn_grow_s0.npz"
+          fi
+          ls -lh "artifacts/w48b_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w48b-${{ matrix.shard }}
+          path: artifacts/w48b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
