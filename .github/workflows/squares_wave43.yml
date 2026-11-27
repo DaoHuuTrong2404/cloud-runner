@@ -1,0 +1,350 @@
+name: "Squares Math Wave 43 DEADLINE-FIXED WIDER-MOVE HOPPER (max_cl=18!) + BAR-TRANSPLANT: 24c 24W-DP + 32c DP->WideHopper + 32c WideHopper Gadget/Pair + 32c FQ Factory + 40c Transplant+WideHopper (160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w43"
+        type: string
+      w42_run_id:
+        required: false
+        default: "45925830735"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w43_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy numba
+      - name: Consolidate W42 megapool + W42A/E/F wins + g42_whop(single+pair) + g42_fq AND Precompute 18-bucket Numba DP Cache ONCE!
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w42_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w42-megapool-bundle" -D .
+          tar -xf megapool_w42.tar
+          rm -f megapool_w42.tar pool/dp_cache.npz
+          mkdir -p pool/wins/w42a pool/wins/w42e pool/wins/w42f pool/gadgets/g42_hop pool/gadgets/g42_fq /tmp/sq_w43_ds
+          gh run download "${{ inputs.w42_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w42-w42a-*" -D pool/wins/w42a || true
+          gh run download "${{ inputs.w42_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w42-w42e-*" -D pool/wins/w42e || true
+          gh run download "${{ inputs.w42_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w42-w42f-*" -D pool/wins/w42f || true
+          gh run download "${{ inputs.w42_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w42-w42b-*" -D pool/gadgets/g42_hop || true
+          gh run download "${{ inputs.w42_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w42-w42c-*" -D pool/gadgets/g42_fq || true
+          echo "Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          echo "Win NPZs:    $(find pool/wins -name '*.npz' | wc -l)"
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w43_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w43_ds/
+          export SQ_DS_DIR="/tmp/sq_w43_ds"
+          python3 -u squares_math/workers/precompute_dp_cache.py \
+            --union-npz /tmp/sq_w43_ds/pub_base_v5.npz \
+            --win-glob "squares_math/seeds/pub_v6_v7_public_wins.npz" \
+            --win-glob "pool/wins/**/*.npz" \
+            --gadget-glob "pool/gadgets/**/*.npz" \
+            --procs 4 --fmax 0.992 \
+            --out-cache pool/dp_cache.npz
+          ls -lh pool/dp_cache.npz
+          tar -cf megapool_w43.tar pool
+          ls -lh megapool_w43.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w43.tar
+          retention-days: 7
+
+  wave43a_grand_24wave_dp:
+    needs: consolidate_w43_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 43A 24-Core TURBO 18-Bucket 24-Wave 4D-DP (0s Startup!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w43.tar
+          mkdir -p "artifacts/w43a_${SHARD_ID}" /tmp/sq_w43_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w43_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w43_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w43_ds/
+          export SQ_DS_DIR="/tmp/sq_w43_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w8b_megapool_dp_seamfq.py \
+            --union-npz /tmp/sq_w43_ds/pub_base_v5.npz \
+            --dp-cache pool/dp_cache.npz \
+            --lags-json /tmp/sq_w43_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 6 --procs 4 --budget-sec 2750 --seed-off 430000 \
+            --out-npz "artifacts/w43a_${SHARD_ID}/w43a_24wdp18_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w43a_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w43a-${{ matrix.shard }}
+          path: artifacts/w43a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave43e_dp_wide_hopper_hybrid:
+    needs: consolidate_w43_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 43E 32-Core 18-Bucket 4D-DP -> WIDER-MOVE HOPPER (max_cl=18!) HYBRID
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w43.tar
+          mkdir -p "artifacts/w43e_${SHARD_ID}" /tmp/sq_w43_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w43_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w43_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w43_ds/
+          export SQ_DS_DIR="/tmp/sq_w43_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          python3 -u squares_math/workers/w39e_dp_hopper_hybrid.py \
+            --dp-cache pool/dp_cache.npz \
+            --lags-json /tmp/sq_w43_ds/lag_targets.json \
+            --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2550 --hop-sec 85 \
+            --seed-off 430000 --max-cands 240 \
+            --out-npz "artifacts/w43e_${SHARD_ID}/w43e_dpwhop_s${SHARD_ID}.npz"
+          ls -lh "artifacts/w43e_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w43e-${{ matrix.shard }}
+          path: artifacts/w43e_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave43b_wide_hopper_gadget_and_pair:
+    needs: consolidate_w43_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 43B 32-Core WIDER-MOVE HOPPER (max_cl=18!) Gadget Surgery (0..4 single, 5..7 pair-fusion!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w43.tar
+          mkdir -p "artifacts/w43b_${SHARD_ID}" /tmp/sq_w43_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w43_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w43_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w43_ds/
+          export SQ_DS_DIR="/tmp/sq_w43_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          if [ "$SHARD_ID" -le 4 ]; then
+            python3 -u squares_math/workers/w36b_hopper_gadget_surgery.py \
+              --union-npz /tmp/sq_w43_ds/pub_base_v5.npz \
+              --dp-cache pool/dp_cache.npz \
+              --lags-json /tmp/sq_w43_ds/lag_targets.json \
+              --mode single --shard "$SHARD_ID" --num-shards 5 --procs 4 --budget-sec 2600 --hop-sec 70 --seed-off 430000 \
+              --out-npz "artifacts/w43b_${SHARD_ID}/g43_whop_single_s${SHARD_ID}.npz"
+          else
+            SUB=$((SHARD_ID - 5))
+            python3 -u squares_math/workers/w36b_hopper_gadget_surgery.py \
+              --union-npz /tmp/sq_w43_ds/pub_base_v5.npz \
+              --dp-cache pool/dp_cache.npz \
+              --lags-json /tmp/sq_w43_ds/lag_targets.json \
+              --mode pairs --shard "$SUB" --num-shards 3 --procs 4 --budget-sec 2600 --hop-sec 70 --seed-off 435000 \
+              --out-npz "artifacts/w43b_${SHARD_ID}/g43_whop_pair_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w43b_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w43b-${{ matrix.shard }}
+          path: artifacts/w43b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave43c_g43_fq_bottleneck_factory:
+    needs: consolidate_w43_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 43C 32-Core TURBO g43 FQ Factory (0..3 shrink, 4..5 grow, 6..7 pair!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w43.tar
+          mkdir -p "artifacts/w43c_${SHARD_ID}" /tmp/sq_w43_ds /tmp/sq_bins
+          if [ "$SHARD_ID" -le 3 ]; then
+            (cd squares_math/fq_crate && cargo build --release --bin fq --bin anneal)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          else
+            (cd squares_math/fq_crate && cargo build --release --bin fq)
+            ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          fi
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w43_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/lag_targets_v2.json" /tmp/sq_w43_ds/lag_targets.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w43_ds/
+          export SQ_DS_DIR="/tmp/sq_w43_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          if [ "$SHARD_ID" -le 3 ]; then
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w43_ds/pub_base_v5.npz \
+              --dp-cache pool/dp_cache.npz \
+              --lags-json /tmp/sq_w43_ds/lag_targets.json \
+              --mode bottleneck_shrink --shard "$SHARD_ID" --num-shards 4 --procs 4 --budget-sec 2750 --seed-off 43000 \
+              --out-npz "artifacts/w43c_${SHARD_ID}/g43_bn_shrink_s${SHARD_ID}.npz"
+          elif [ "$SHARD_ID" -le 5 ]; then
+            SUB=$((SHARD_ID - 4))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w43_ds/pub_base_v5.npz \
+              --dp-cache pool/dp_cache.npz \
+              --lags-json /tmp/sq_w43_ds/lag_targets.json \
+              --mode bottleneck_grow --shard "$SUB" --num-shards 2 --procs 4 --budget-sec 2750 --seed-off 43000 \
+              --out-npz "artifacts/w43c_${SHARD_ID}/g43_bn_grow_s${SUB}.npz"
+          else
+            SUB=$((SHARD_ID - 6))
+            python3 -u squares_math/workers/w9a_bottleneck_surgery.py \
+              --union-npz /tmp/sq_w43_ds/pub_base_v5.npz \
+              --dp-cache pool/dp_cache.npz \
+              --lags-json /tmp/sq_w43_ds/lag_targets.json \
+              --mode bottleneck_pair --shard "$SUB" --num-shards 2 --procs 4 --budget-sec 2750 --seed-off 43000 \
+              --out-npz "artifacts/w43c_${SHARD_ID}/g43_bn_pair_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w43c_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w43c-${{ matrix.shard }}
+          path: artifacts/w43c_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave43f_transplant_and_wide_hopper:
+    needs: consolidate_w43_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 43F 40-Core DEADLINE-FIXED BAR-TRANSPLANT + WIDER-MOVE HOPPER (0..5 Transplant+WideHop, 6..9 Fast WideHop+n+1 Removal!)
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w43.tar
+          mkdir -p "artifacts/w43f_${SHARD_ID}" /tmp/sq_w43_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w43_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w43_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w43_ds/
+          export SQ_DS_DIR="/tmp/sq_w43_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          if [ "$SHARD_ID" -le 5 ]; then
+            python3 -u squares_math/workers/w42f_transplant_wide_hopper.py \
+              --union-npz /tmp/sq_w43_ds/pub_base_v5.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --frontier-json /tmp/sq_w43_ds/frontier_targets_public.json \
+              --shard "$SHARD_ID" --num-shards 6 --procs 4 --budget-sec 2600 \
+              --hop-sec 110 --n-seeds 3 --seed-off 430000 \
+              --out-npz "artifacts/w43f_${SHARD_ID}/w43f_tpwh_s${SHARD_ID}.npz"
+          else
+            SUB=$((SHARD_ID - 6))
+            python3 -u squares_math/workers/w32a_fresh_basin_fast_hopper.py \
+              --union-npz /tmp/sq_w43_ds/pub_base_v5.npz \
+              --win-glob "pool/wins/**/*.npz" \
+              --frontier-json /tmp/sq_w43_ds/frontier_targets_public.json \
+              --shard "$SUB" --num-shards 4 --procs 4 --budget-sec 2600 \
+              --hop-sec 110 --del-sec 100 --n-seeds 3 --seed-off 435000 --max-targets 120 \
+              --out-npz "artifacts/w43f_${SHARD_ID}/w43f_wfh_s${SUB}.npz"
+          fi
+          ls -lh "artifacts/w43f_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w43f-${{ matrix.shard }}
+          path: artifacts/w43f_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
