@@ -1,0 +1,187 @@
+name: "Squares Math Wave 54 FAST STAG SNIPER + RECT-GADGET 8-SYM DP + FRESH R33 CASCADE HOPPER (88c W54S + 40c W54G + 32c W54D = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w54"
+        type: string
+      w53_run_id:
+        required: true
+        default: "46061205621"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w54_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W53 megapool + W53 wins (<60s ultra-fast bundle!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w53_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w53-megapool-bundle" -D .
+          tar -xf megapool_w53.tar
+          rm -f megapool_w53.tar
+          mkdir -p pool/wins/pub_seeds pool/wins/w53s pool/wins/w53h pool/wins/w53g
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w53_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w53-w53s-*" -D pool/wins/w53s || true
+          gh run download "${{ inputs.w53_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w53-w53h-*" -D pool/wins/w53h || true
+          gh run download "${{ inputs.w53_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w53-w53g-*" -D pool/wins/w53g || true
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w54.tar pool/wins
+          ls -lh megapool_w54.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w54.tar
+          retention-days: 7
+
+  wave54s_fast_stag_sniper:
+    needs: consolidate_w54_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 54S 88-Core Fast Vectorized CC-Bar Splicer + Long-Horizon Sniper (8 donors/shard)!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w54.tar
+          mkdir -p "artifacts/w54s_${SHARD_ID}" /tmp/sq_w54_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w54_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w54_ds/
+          export SQ_DS_DIR="/tmp/sq_w54_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          timeout -s KILL 2380s python3 -u squares_math/workers/w54s_fast_stag_splicer_and_sniper.py \
+            --union-npz /tmp/sq_w54_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --shard "$SHARD_ID" --num-shards 22 --procs 4 --budget-sec 2220 \
+            --r1-sec 260 --r2-sec 240 --r3-sec 240 --seed-off 580000 \
+            --out-npz "artifacts/w54s_${SHARD_ID}/w54s_snipe_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w54s_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w54s-${{ matrix.shard }}
+          path: artifacts/w54s_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave54g_rect_quench_faultdp:
+    needs: consolidate_w54_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 54G 40-Core Rectangle-Mode FQ Gadget Quencher + 8-Sym Fault-DP -> 3R Wider-Hopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w54.tar
+          mkdir -p "artifacts/w54g_${SHARD_ID}" /tmp/sq_w54_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w54_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w54_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w54_ds/
+          export SQ_DS_DIR="/tmp/sq_w54_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          timeout -s KILL 2380s python3 -u squares_math/workers/w53g_rect_quench_8sym_faultdp.py \
+            --union-npz /tmp/sq_w54_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w54_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 10 --procs 4 --budget-sec 2220 \
+            --r1-sec 220 --r2-sec 200 --r3-sec 200 --seed-off 600000 \
+            --out-npz "artifacts/w54g_${SHARD_ID}/w54g_rgdp_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w54g_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w54g-${{ matrix.shard }}
+          path: artifacts/w54g_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave54d_fresh_wins_cascade:
+    needs: consolidate_w54_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 54D 32-Core Secondary Basin-Jump + Delete-1 Cascade on Fresh R33/W53 Winners!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w54.tar
+          mkdir -p "artifacts/w54d_${SHARD_ID}" /tmp/sq_w54_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w54_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w54_ds/
+          export SQ_DS_DIR="/tmp/sq_w54_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          timeout -s KILL 2380s python3 -u squares_math/workers/w54d_fresh_wins_cascade_hopper.py \
+            --union-npz /tmp/sq_w54_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --shard "$SHARD_ID" --num-shards 8 --procs 4 --budget-sec 2220 \
+            --r1-sec 280 --r2-sec 240 --r3-sec 240 --seed-off 590000 \
+            --out-npz "artifacts/w54d_${SHARD_ID}/w54d_casc_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w54d_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w54d-${{ matrix.shard }}
+          path: artifacts/w54d_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7

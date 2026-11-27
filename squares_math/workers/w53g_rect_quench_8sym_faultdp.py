@@ -51,6 +51,32 @@ import w53h_nakajima_reharden_and_softinsert as w53h
 import w53s_ccbar_reharden_splicer as w53s
 
 
+def fast_quench_dp(P_comp, target_L_ref):
+    x0, y0, t0 = sq2.normalize(P_comp[:, 0], P_comp[:, 1], P_comp[:, 2])
+    S_init = max(float(sq2.side(x0, y0, t0)), float(target_L_ref)) * 1.0015
+    ok, rx, ry, rt, _ = sq2.relax_at(x0, y0, t0, S_init, max_iter=5000)
+    if not ok:
+        ok, rx, ry, rt, _ = sq2.relax_at(x0, y0, t0, S_init * 1.010, max_iter=6500)
+        if not ok:
+            return None
+    _, x2, y2, t2 = sq2.squeeze(
+        rx, ry, rt, rel0=2.5e-3, rel_min=5e-7, max_iter=4000, max_tries=40
+    )
+    Lf, fx, fy, ft, good = sq2.finalize(x2, y2, t2, tol=2e-12)
+    if not good:
+        return None
+    import sq_engine as E
+
+    Q = E.to_origin(np.column_stack([fx, fy, ft]))
+    try:
+        Sc, Qc = w51d.compact_deleted(Q, max_iter=30, patience=2)
+        if Qc is not None and Sc < Lf:
+            return Qc, float(Sc)
+    except Exception:
+        pass
+    return Q, float(E.side(Q))
+
+
 def quench_gadget_worker(args_tuple):
     key, sq_init, seed0 = args_tuple
     w, h, dm = key
@@ -83,35 +109,56 @@ def quench_gadget_worker(args_tuple):
 
 
 def collect_chain_gadget_keys(dp, PG, PM, PQ, G, targets):
-    """Trace optimal and near-optimal DP chains for `targets` to collect the most impactful `(w, h, dm)` keys."""
+    """Trace optimal and near-optimal DP chains (`dp[:K+1, :K+1, D, :]`) to collect active `(w, h, dm)` keys."""
     key_counts = {}
     for _, n, K, D in targets:
-        best_f = float(np.min(dp[K, D, :]))
-        if best_f > 1.5:
+        if K > fdp8.WMAX or D <= 0 or D > fdp8.DMAX:
             continue
-        for m0 in range(1, fdp8.MMAX + 1):
-            if dp[K, D, m0] > best_f + 0.030:
+        sub = dp[: K + 1, : K + 1, D, :]
+        if not np.isfinite(sub).any():
+            continue
+        best_f = float(np.min(sub))
+        flat_idx = np.argsort(sub.ravel())
+        for fi in flat_idx[:18]:
+            cw, ch, q = np.unravel_index(int(fi), sub.shape)
+            fv = float(sub[cw, ch, q])
+            if not math.isfinite(fv) or fv > best_f + 0.035:
+                break
+            t_cw, t_ch, t_d, t_q = int(cw), int(ch), int(D), int(q)
+            links = []
+            ok_tr = True
+            while (t_cw or t_ch or t_d) and len(links) < 12:
+                g = int(PG[t_cw, t_ch, t_d, t_q])
+                if g < 0:
+                    ok_tr = False
+                    break
+                mode = int(PM[t_cw, t_ch, t_d, t_q])
+                qp = int(PQ[t_cw, t_ch, t_d, t_q])
+                links.append((g, mode))
+                w, h, dd = int(G[g, 0]), int(G[g, 1]), int(G[g, 2])
+                t_cw -= w + (1 if mode == 1 else 0)
+                t_ch -= h + (1 if mode == 2 else 0)
+                t_d -= dd
+                t_q = qp
+            if not ok_tr or not links:
                 continue
-            cw, cd, cm = K, D, m0
-            steps = 0
-            while cm > 0 and steps < 10:
-                steps += 1
-                gi = int(PG[cw, cd, cm])
-                mode = int(PM[cw, cd, cm])
-                prev = int(PQ[cw, cd, cm])
-                if gi < 0:
-                    break
-                gw, gh, gdm = int(G[gi, 0]), int(G[gi, 1]), int(G[gi, 2])
-                gf = float(G[gi, 3])
-                # Skip trivial/rigid exact sqrt(2) gadgets if tiny, focus on multi-square tilted gadgets!
-                if gw * gh + gdm >= 12 and gdm >= 1 and gf > 0.42:
+            if (
+                len(links) == 1
+                and int(G[links[0][0], 0]) == K
+                and int(G[links[0][0], 1]) == K
+            ):
+                continue
+            wt = 3 if len(links) >= 2 else 1
+            for g, _ in links:
+                gw, gh, gdm, gf = (
+                    int(G[g, 0]),
+                    int(G[g, 1]),
+                    int(G[g, 2]),
+                    float(G[g, 3]),
+                )
+                if gw * gh + gdm >= 10 and gdm >= 1 and gf > 0.42:
                     k = (gw, gh, gdm)
-                    key_counts[k] = key_counts.get(k, 0) + (3 if cm >= 2 else 1)
-                pw = prev // (fdp8.DMAX + 1)
-                pd = prev % (fdp8.DMAX + 1)
-                cw, cd, cm = pw, pd, cm - 1
-                if mode == 3 and cm != 0:
-                    break
+                    key_counts[k] = key_counts.get(k, 0) + wt
     ranked = sorted(key_counts.items(), key=lambda kv: (-kv[1], -kv[0][2]))
     return [k for k, _ in ranked]
 
@@ -250,8 +297,8 @@ def main():
         dp_chains = fdp8.trace_and_compose(dp0, PG0, PM0, PQ0, G, donors, K, D, top_m=3)
         for ci, (L_est, dtag, P_comp) in enumerate(dp_chains):
             # Prefer multi-gadget (`m>=2`) OR improved single-gadget chains!
-            if L_est < L0 + 0.026:
-                rh = w53s.heal_cut_hybrid(P_comp, L0, seed=args.seed_off + n * 13 + ci)
+            if L_est < L0 + 0.024:
+                rh = fast_quench_dp(P_comp, L0)
                 if rh is not None:
                     Qc, Sc = rh
                     adist = w53h.topology_angle_dist(Qc, cur[n][1])
