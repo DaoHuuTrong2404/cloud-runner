@@ -1,0 +1,100 @@
+name: "Squares Math Wave 77 80 UNTOUCHED OLD_333-TWIN LOW-TILT DEFECT PUZZLES (Rank #49..#135) 6-ISLAND SANTA-GA v7 + KINK POLISH (40 Shards = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w77"
+        type: string
+      w76_run_id:
+        required: true
+        default: "46158673335"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w77_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Consolidate W76 wins (n=912, 707, 978!) into megapool_w77.tar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w76_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w76-megapool-bundle" -D .
+          tar -xf megapool_w76.tar
+          rm -f megapool_w76.tar
+          mkdir -p pool/wins/pub_seeds pool/wins/w76a pool/wins/w76b
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w76_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w76-w76a-*" -D pool/wins/w76a || true
+          gh run download "${{ inputs.w76_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w76-w76b-*" -D pool/wins/w76b || true
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l) | Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          tar -cf megapool_w77.tar pool/bins pool/wins pool/gadgets pool/dp_cache.npz
+          ls -lh megapool_w77.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w77.tar
+          retention-days: 7
+
+  wave77_untouched_defect_twins_gav7:
+    needs: consolidate_w77_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 37
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35","36","37","38","39"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 77 160-Core Untouched OLD_333-Twin Defect Unjamming (Santa-GA v7 + Kink Polish)!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w77.tar
+          mkdir -p "artifacts/w77_${SHARD_ID}" /tmp/sq_w77_ds /tmp/sq_bins
+          chmod +x pool/bins/*
+          ln -sf "$(pwd)/pool/bins/"* /tmp/sq_bins/
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w77_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w77_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w77_ds/
+          export SQ_DS_DIR="/tmp/sq_w77_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export PACKER_BIN="/tmp/sq_bins/packer"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          export SANTA_GA_BIN="/tmp/sq_bins/santa_ga"
+          timeout -s KILL 1960s python3 -u squares_math/workers/w77_untouched_defect_twins_santa_ga_v7.py \
+            --union-npz /tmp/sq_w77_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --dp-cache-npz pool/dp_cache.npz \
+            --frontier-json /tmp/sq_w77_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 40 --procs 4 --budget-sec 1840 \
+            --seed-off 4350000 \
+            --out-npz "artifacts/w77_${SHARD_ID}/w77_twins_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w77_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w77-${{ matrix.shard }}
+          path: artifacts/w77_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
