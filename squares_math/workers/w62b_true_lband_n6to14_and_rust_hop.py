@@ -99,7 +99,7 @@ def mutate_tilted_skeleton(T_base, s_try, rng):
         base_i = rng.randrange(m)
         x0, y0, deg0 = T[base_i]
         tr = math.radians(deg0)
-        dx, dy = random.choice(
+        dx, dy = rng.choice(
             [
                 (math.cos(tr), math.sin(tr)),
                 (-math.cos(tr), -math.sin(tr)),
@@ -471,9 +471,7 @@ def main():
                 if ok and Lf < L0_cur - 1e-9:
                     ds = (Lf - L0_cur) / math.sqrt(n)
                     tot_ds += ds
-                    wins[n] = (
-                        (float(Lf), xf0, yf0, tf0) if False else (float(Lf), xf, yf, tf)
-                    )
+                    wins[n] = (float(Lf), xf, yf, tf)
                     print(
                         f"  [W62B TSMC WIN!!] n={n:4d} [{tag}->{best_mode}] dA={adist:.2f} {cur[n][0]:.7f} -> {Lf:.7f} (dS={ds:+.8f}, w={wn_cnt})!",
                         flush=True,
