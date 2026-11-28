@@ -34,6 +34,7 @@ jobs:
           gh run download "${{ inputs.w64_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w64-w64g-*" -D tmp_w64g || true
           gh run download "${{ inputs.w64_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w64-w64m-*" -D pool/wins/w64m || true
           find tmp_w64g -name 'w64g_abin_*.npz' -exec cp -f {} pool/wins/w64g/ \; || true
+          find tmp_w64g -name 'w64g_gadgets_*.npz' -exec cp -f {} pool/gadgets/ \; || true
           rm -rf tmp_w64g
           echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l)"
           tar -cf megapool_w65.tar pool/wins pool/gadgets

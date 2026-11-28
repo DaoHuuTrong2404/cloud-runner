@@ -350,6 +350,30 @@ def main():
         if len(queued) >= 4:
             break
 
+    # Zero-idle guard: top up `queued` to >= 3 using frozen-grid `packer hop` on `my_targets`!
+    for fb_i, nn in enumerate(my_targets):
+        if len(queued) >= 3:
+            break
+        if seen_n.get(nn, 0) >= 1:
+            continue
+        L0_fb = wins[nn][0] if nn in wins else cur[nn][0]
+        P0_fb = cur[nn][1]
+        fz = RE.build_far_grid_freeze_mask(P0_fb, buffer_dist=3.5, min_free=85)
+        rhp = RE.run_packer_hop(
+            P0_fb,
+            L0_fb - 2.5e-4,
+            seed=args.seed_off + 70000 + args.shard * 907 + fb_i * 37,
+            iters=35000,
+            frozen_mask=fz,
+            timeout_s=28.0,
+        )
+        if rhp is not None and rhp[0] < L0_fb + 0.012:
+            ad_fb = w53h.topology_angle_dist(rhp[1], P0_fb)
+            queued.append((rhp[0] - L0_fb, nn, rhp[2], rhp[0], ad_fb, rhp[1]))
+        else:
+            queued.append((0.0, nn, "cur_direct", L0_fb, 0.0, P0_fb))
+        seen_n[nn] = 1
+
     print(
         f"[W65S s={args.shard}] screened={len(screened)} -> queued={len(queued)} ({time.time() - t0:.1f}s)",
         flush=True,

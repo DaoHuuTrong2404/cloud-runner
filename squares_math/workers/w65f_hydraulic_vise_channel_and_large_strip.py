@@ -248,11 +248,22 @@ def main():
         K = math.isqrt(n)
         if K * K != n and cur[n][0] < K + 1 - 1e-6 and cur[n][1] is not None:
             donors.append(cur[n][1])
-    if os.path.exists(args.global_gadgets_npz):
-        with np.load(args.global_gadgets_npz) as zg:
-            if "keys" in zg.files:
-                for i in range(len(zg["keys"])):
-                    donors.append(np.asarray(zg[f"sq_{i}"], dtype=np.float64))
+    import glob as _glob
+
+    gad_files = sorted(set(_glob.glob("pool/gadgets/**/*.npz", recursive=True)))
+    if (
+        os.path.exists(args.global_gadgets_npz)
+        and args.global_gadgets_npz not in gad_files
+    ):
+        gad_files.append(args.global_gadgets_npz)
+    for gf in gad_files:
+        try:
+            with np.load(gf) as zg:
+                if "keys" in zg.files:
+                    for i in range(len(zg["keys"])):
+                        donors.append(np.asarray(zg[f"sq_{i}"], dtype=np.float64))
+        except Exception:
+            pass
 
     G = fdp8.extract_gadgets(donors)
     dp0, PG0, PM0, PQ0 = fdp8.solve_dp(G)
@@ -481,6 +492,29 @@ def main():
         queued.append(item)
         if len(queued) >= 4:
             break
+
+    for fb_i, nn in enumerate(my_puzzles):
+        if len(queued) >= 3:
+            break
+        if seen_n.get(nn, 0) >= 1:
+            continue
+        L0_fb = wins[nn][0] if nn in wins else cur[nn][0]
+        P0_fb = cur[nn][1]
+        fz = RE.build_far_grid_freeze_mask(P0_fb, buffer_dist=3.5, min_free=85)
+        rhp = RE.run_packer_hop(
+            P0_fb,
+            L0_fb - 2.5e-4,
+            seed=args.seed_off + 75000 + args.shard * 907 + fb_i * 37,
+            iters=35000,
+            frozen_mask=fz,
+            timeout_s=28.0,
+        )
+        if rhp is not None and rhp[0] < L0_fb + 0.012:
+            ad_fb = w53h.topology_angle_dist(rhp[1], P0_fb)
+            queued.append((rhp[0] - L0_fb, nn, rhp[2], rhp[0], ad_fb, rhp[1]))
+        else:
+            queued.append((0.0, nn, "cur_direct", L0_fb, 0.0, P0_fb))
+        seen_n[nn] = 1
 
     print(
         f"[W65F s={args.shard}] screened={len(screened)} -> queued={len(queued)} ({time.time() - t0:.1f}s)",
