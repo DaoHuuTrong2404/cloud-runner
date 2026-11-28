@@ -48,7 +48,7 @@ import rust_engines as RE
 import sq_engine as E
 import w5b_2d_faultdp_gadgetq as f2d
 import w32a_fresh_basin_fast_hopper as w32a
-import w50d_deeper_wide_hopper as w50d
+import w50d_exhaustive_private_del1_widehopper as w50d
 import w51d_two_stage_del1_widehopper as w51d
 import w51r_residual_contact_continuation as w51r
 import w53h_nakajima_reharden_and_softinsert as w53h
