@@ -1,0 +1,169 @@
+name: "Squares Math Wave 68 HIGH-GEN RUST SANTA-GA v2 (GLS-LEGALIZE + MIRROR_AVG + DP-SEEDS) + 47-GADGET GLOBAL 8-SYM DP (96c W68A + 64c W68S = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w68"
+        type: string
+      w67_run_id:
+        required: true
+        default: "46115339303"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w68_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Precompile all 5 Rust LTO binaries (with santa_ga v2!) + consolidate W67 wins + 23 W67S super-gadgets + precompute 47-gadget 8-Sym DP cache!
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin packer --bin anneal --bin harden --bin santa_ga)
+          mkdir -p pool/bins
+          cp -f squares_math/fq_crate/target/release/{fq,packer,anneal,harden,santa_ga} pool/bins/
+          chmod +x pool/bins/*
+          gh run download "${{ inputs.w67_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w67-megapool-bundle" -D .
+          tar -xf megapool_w67.tar
+          rm -f megapool_w67.tar
+          mkdir -p pool/wins/pub_seeds pool/wins/w67a pool/wins/w67s tmp_w67s
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w67_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w67-w67a-*" -D pool/wins/w67a || true
+          gh run download "${{ inputs.w67_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w67-w67s-*" -D tmp_w67s || true
+          find tmp_w67s -name 'w67s_seg_*.npz' -exec cp -f {} pool/wins/w67s/ \; || true
+          find tmp_w67s -name 'w67s_gadgets_*.npz' -exec cp -f {} pool/gadgets/ \; || true
+          rm -rf tmp_w67s
+          python3 -u squares_math/tools/dp8_cache_w68.py \
+            --union-npz squares_math/seeds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --gad-glob "pool/gadgets/**/*.npz" \
+            --out-npz pool/dp_cache.npz
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l) | Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          ls -lh pool/dp_cache.npz
+          tar -cf megapool_w68.tar pool/bins pool/wins pool/gadgets pool/dp_cache.npz
+          ls -lh megapool_w68.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w68.tar
+          retention-days: 7
+
+  wave68a_santa_ga_v2:
+    needs: consolidate_w68_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 37
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 68A 96-Core High-Gen Rust Santa-GA v2 (GLS-Legalize + Mirror-Avg + DP Seeds) + WideHopper!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w68.tar
+          mkdir -p "artifacts/w68a_${SHARD_ID}" /tmp/sq_w68_ds /tmp/sq_bins
+          chmod +x pool/bins/*
+          ln -sf "$(pwd)/pool/bins/"* /tmp/sq_bins/
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w68_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w68_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w68_ds/
+          export SQ_DS_DIR="/tmp/sq_w68_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export PACKER_BIN="/tmp/sq_bins/packer"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          export SANTA_GA_BIN="/tmp/sq_bins/santa_ga"
+          timeout -s KILL 1960s python3 -u squares_math/workers/w68a_deep_santa_ga_v2_1puz_killshot.py \
+            --union-npz /tmp/sq_w68_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --dp-cache-npz pool/dp_cache.npz \
+            --frontier-json /tmp/sq_w68_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 24 --procs 4 --budget-sec 1840 \
+            --seed-off 2550000 \
+            --out-npz "artifacts/w68a_${SHARD_ID}/w68a_santagav2_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w68a_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w68a-${{ matrix.shard }}
+          path: artifacts/w68a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave68s_global_seg2_dp:
+    needs: consolidate_w68_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 37
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 68S 64-Core Global 47-Gadget 8-Sym DP + Compact Merged-Seam Seg2 Forge!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w68.tar
+          mkdir -p "artifacts/w68s_${SHARD_ID}" /tmp/sq_w68_ds /tmp/sq_bins
+          chmod +x pool/bins/*
+          ln -sf "$(pwd)/pool/bins/"* /tmp/sq_bins/
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w68_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w68_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w68_ds/
+          export SQ_DS_DIR="/tmp/sq_w68_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export PACKER_BIN="/tmp/sq_bins/packer"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          export SANTA_GA_BIN="/tmp/sq_bins/santa_ga"
+          timeout -s KILL 1960s python3 -u squares_math/workers/w68s_global_seg2_dp_and_small_seam_forge.py \
+            --union-npz /tmp/sq_w68_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --dp-cache-npz pool/dp_cache.npz \
+            --frontier-json /tmp/sq_w68_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 16 --procs 4 --budget-sec 1840 \
+            --seed-off 2650000 \
+            --out-npz "artifacts/w68s_${SHARD_ID}/w68s_seg2_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w68s_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w68s-${{ matrix.shard }}
+          path: artifacts/w68s_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7

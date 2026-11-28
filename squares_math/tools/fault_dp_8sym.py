@@ -268,3 +268,109 @@ def trace_and_compose(dp, PG, PM, PQ, G, donors, K, D, top_m=2):
         except Exception:
             continue
     return results
+
+
+def trace_and_compose_v2(dp, PG, PM, PQ, G, donors, donor_n, K, D, top_m=6):
+    """Upgraded composer that keeps single-link `(w=K, h=K)` crops whenever they come from a forged
+    gadget (`donor_n[di] < 0`) or a different-size puzzle (`donor_n[di] != K*K + D`), and deduplicates
+    by full `(w, h, dm, mode, di)` chain signature across top 96 states!
+    """
+    if K > WMAX or D <= 0 or D > DMAX:
+        return []
+    sub = dp[: K + 1, : K + 1, D, :]
+    if not np.isfinite(sub).any():
+        return []
+
+    n_target = K * K + D
+    flat_idx = np.argsort(sub.ravel())
+    results = []
+    seen_sig = set()
+    for fi in flat_idx[:96]:
+        cw, ch, q = np.unravel_index(int(fi), sub.shape)
+        f_val = float(sub[cw, ch, q])
+        if not math.isfinite(f_val):
+            break
+        t_cw, t_ch, t_d, t_q = int(cw), int(ch), int(D), int(q)
+        links = []
+        ok_trace = True
+        while t_cw or t_ch or t_d:
+            g = int(PG[t_cw, t_ch, t_d, t_q])
+            if g < 0:
+                ok_trace = False
+                break
+            mode = int(PM[t_cw, t_ch, t_d, t_q])
+            qp = int(PQ[t_cw, t_ch, t_d, t_q])
+            links.append((g, mode))
+            w, h, dd = int(G[g, 0]), int(G[g, 1]), int(G[g, 2])
+            t_cw -= w + (1 if mode == 1 else 0)
+            t_ch -= h + (1 if mode == 2 else 0)
+            t_d -= dd
+            t_q = qp
+        if not ok_trace or not links:
+            continue
+        links = links[::-1]
+        if (
+            len(links) == 1
+            and int(G[links[0][0], 0]) == K
+            and int(G[links[0][0], 1]) == K
+        ):
+            di0 = int(G[links[0][0], 6])
+            if (
+                donor_n is not None
+                and di0 < len(donor_n)
+                and int(donor_n[di0]) == n_target
+            ):
+                continue
+        sig = tuple(
+            (int(G[g, 0]), int(G[g, 1]), int(G[g, 2]), m, int(G[g, 6]))
+            for g, m in links
+        )
+        if sig in seen_sig:
+            continue
+        seen_sig.add(sig)
+
+        try:
+            M = len(links)
+            F = f_val + (M + 2) * EPS
+            a = np.full(K, K, dtype=int)
+            b = np.full(K, K, dtype=int)
+            gad = []
+            ox, oy = 0, K
+            for m_i, (g, mode) in enumerate(links):
+                w, h, dm, di, si = (int(v) for v in G[g, [0, 1, 2, 6, 7]])
+                if m_i > 0:
+                    ox += 1 if mode == 1 else 0
+                    oy -= 1 if mode == 2 else 0
+                oy -= h
+                if mode == 1:
+                    a[ox - 1] = b[ox - 1] = oy + h
+                a[ox : ox + w] = oy
+                b[ox : ox + w] = oy + h
+                sq_g, _ = crop_gadget(donors[di], si, w, h, dm)
+                sq_g = sq_g.copy()
+                sq_g[:, :2] *= 1.0 + 1e-11
+                sq_g[:, 0] += ox + EPS * (1 + m_i)
+                sq_g[:, 1] += oy + EPS * (M - m_i)
+                gad.append(sq_g)
+                ox += w
+            a[ox:] = 0
+            b[ox:] = 0
+            if oy < 0 or ox > K or not (np.all(a <= b) and np.all(a[1:] <= b[:-1])):
+                continue
+            cells = [(i + 0.5, j + 0.5, 0.0) for i in range(K) for j in range(a[i])]
+            cells += [
+                (i + 0.5 + F, j + 0.5 + F, 0.0)
+                for i in range(K)
+                for j in range(b[i], K)
+            ]
+            parts = (
+                [np.array(cells, dtype=np.float64).reshape(-1, 3)] if cells else []
+            ) + gad
+            P_comp = np.concatenate(parts, axis=0)
+            if len(P_comp) == n_target:
+                results.append((float(K + F), f"fdp8v2_m{M}", P_comp))
+                if len(results) >= top_m:
+                    break
+        except Exception:
+            continue
+    return results
