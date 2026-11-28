@@ -2322,7 +2322,7 @@ fn main() {
             }
             let post_hold = gen.saturating_sub(isl[ii].hold_until);
             let hopeless = post_hold >= 140 && isl[ii].e0 > 1000.0 * thr;
-            let far_behind = post_hold >= 85 && isl[ii].l - min_l > 0.0020;
+            let far_behind = post_hold >= 135 && isl[ii].l - min_l > 0.0048;
             if hopeless || far_behind || stall > r_stall {
                 resets += 1;
                 let role = isl[ii].role;

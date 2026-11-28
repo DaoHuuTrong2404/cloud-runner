@@ -496,3 +496,151 @@ def defect_snap_candidates(P_in):
             Q2[c_mask, 2] = med_t
             out.append((f"coal_{int(c_mask.sum())}", Q2))
     return out
+
+
+def eval_deep_donor_job(job):
+    """Deep soft-disk (`r0=0.21`) + `fq` quench healing for genuine high-tilt donor basin invasion!"""
+    fam, tag, n, L0, P_cand, seed = job
+    try:
+        if fam == "del_donor":
+            S_lp, Q_lp = compact_fixed_angle_lp(
+                P_cand, seed=int(seed), trust=0.28, time_limit=1.8
+            )
+            P_start = Q_lp if Q_lp is not None else P_cand
+            rq = RE.run_fq_quench_args(
+                P_start,
+                [
+                    "--seed",
+                    str(int(seed) + 7),
+                    "--round-r0",
+                    "0.08",
+                    "--round-steps",
+                    "12",
+                    "--round-press",
+                    "--round-press-outer",
+                    "6",
+                    "--loosen",
+                    "1.003",
+                    "--outer",
+                    "48",
+                    "--pit",
+                    "300",
+                    "--flip-top",
+                    "22",
+                    "--finish",
+                    "--stag-w",
+                    "0",
+                    "--deadline",
+                    "11.5",
+                ],
+                s_ref=min(L0 + 0.012, S_lp),
+                timeout_s=14.5,
+            )
+            if rq is not None:
+                return fam, tag, n, float(rq[0]), rq[1]
+            return fam, tag, n, float(S_lp), P_start
+
+        if fam in ("ins_donor", "lpeel_donor"):
+            r0_v = 0.22 if fam == "ins_donor" else 0.18
+            rh = RE.run_harden_reharden(
+                P_cand,
+                s_ref=L0 + 0.002,
+                seed=int(seed),
+                r0=r0_v,
+                stiff0=0.22,
+                pre=2400,
+                hold=11000,
+                release=4800,
+                settle=3200,
+                hold_f=1.0018,
+                noise=0.0055,
+                timeout_s=16.5,
+            )
+            P_mid = rh[1] if rh is not None else P_cand
+            rq = RE.run_fq_quench_args(
+                P_mid,
+                [
+                    "--seed",
+                    str(int(seed) + 17),
+                    "--round-r0",
+                    "0.085",
+                    "--round-steps",
+                    "12",
+                    "--round-press",
+                    "--round-press-outer",
+                    "6",
+                    "--loosen",
+                    "1.004",
+                    "--outer",
+                    "50",
+                    "--pit",
+                    "300",
+                    "--flip-top",
+                    "22",
+                    "--finish",
+                    "--stag-w",
+                    "0",
+                    "--deadline",
+                    "12.0",
+                ],
+                s_ref=L0 + 0.006,
+                timeout_s=15.0,
+            )
+            if rq is not None:
+                return fam, tag, n, float(rq[0]), rq[1]
+            if rh is not None:
+                return fam, tag, n, float(rh[0]), rh[1]
+    except Exception:
+        return fam, tag, n, math.inf, None
+    return fam, tag, n, math.inf, None
+
+
+def build_donor_invasion_jobs(n, cur, bseed):
+    """Build deep donor-basin jobs from `n+1`, `n-1`, and `(K+1)^2+D` when they carry distinct tilted topologies!"""
+    L0 = cur[n][0]
+    P0 = cur[n][1]
+    jobs = []
+
+    if n + 1 <= 1000 and cur[n + 1][1] is not None and cur[n + 1][0] - L0 < 0.035:
+        dels = delete_one_candidates(cur[n + 1][1], max_boundary=8, max_sparse=6)
+        # Screen all with fast LP first in caller or pass top 4
+        lp_scored = []
+        for di, (dtag, P_d) in enumerate(dels):
+            S_lp, Q_lp = compact_fixed_angle_lp(
+                P_d, seed=bseed + di, trust=0.25, time_limit=0.8
+            )
+            lp_scored.append((S_lp, dtag, Q_lp if Q_lp is not None else P_d))
+        lp_scored.sort(key=lambda z: z[0])
+        for rank_i, (_, dtag, Q_d) in enumerate(lp_scored[:4]):
+            jobs.append(("del_donor", f"np1_{dtag}", n, L0, Q_d, bseed + 100 + rank_i))
+
+    K = math.isqrt(n)
+    for sk in (1, 2):
+        n_up = (K + sk) ** 2 + (n - K * K)
+        if (
+            n_up <= 1000
+            and cur[n_up][1] is not None
+            and cur[n_up][0] - float(sk) < L0 + 0.006
+        ):
+            for pi, (ptag, P_pl) in enumerate(
+                soft_corner_lpeel_candidates(cur[n_up][1], n)[:4]
+            ):
+                jobs.append(
+                    (
+                        "lpeel_donor",
+                        f"{ptag}_from{n_up}",
+                        n,
+                        L0,
+                        P_pl,
+                        bseed + 200 + 8 * sk + pi,
+                    )
+                )
+
+    if n > 5 and cur[n - 1][1] is not None and L0 - cur[n - 1][0] > 0.008:
+        ins = insert_holes_candidates(
+            cur[n - 1][1], P_n_own=P0, seed=bseed + 300, n_holes=2, n_target=2
+        )
+        for ii, (itag, P_i) in enumerate(ins[:4]):
+            jobs.append(("ins_donor", f"nm1_{itag}", n, L0, P_i, bseed + 310 + ii))
+
+    return jobs
