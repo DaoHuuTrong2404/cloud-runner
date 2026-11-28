@@ -409,6 +409,90 @@ def eval_bidir_seed_job(job):
                     if rq is not None and rq[0] < best_S:
                         best_S, best_Q, best_tag = float(rq[0]), rq[1], dtag + "_lp_fq"
             return mode, best_tag, n, best_S, best_Q
+
+        if mode == "defsnap":
+            rh = RE.run_harden_reharden(
+                P_cand,
+                s_ref=L0,
+                seed=int(seed),
+                r0=0.15,
+                stiff0=0.30,
+                pre=2000,
+                hold=7200,
+                release=3400,
+                settle=2600,
+                hold_f=1.0008,
+                noise=0.0045,
+                timeout_s=11.0,
+            )
+            P_mid = rh[1] if rh is not None else P_cand
+            rq = RE.run_fq_quench_args(
+                P_mid,
+                [
+                    "--seed",
+                    str(int(seed) + 19),
+                    "--round-r0",
+                    "0.075",
+                    "--round-steps",
+                    "10",
+                    "--round-press",
+                    "--round-press-outer",
+                    "5",
+                    "--loosen",
+                    "1.0035",
+                    "--outer",
+                    "42",
+                    "--pit",
+                    "260",
+                    "--flip-top",
+                    "18",
+                    "--finish",
+                    "--stag-w",
+                    "0",
+                    "--deadline",
+                    "8.5",
+                ],
+                s_ref=L0,
+                timeout_s=11.0,
+            )
+            if rq is None:
+                return mode, tag, n, math.inf, None
+            return mode, tag, n, float(rq[0]), rq[1]
     except Exception:
         return mode, tag, n, math.inf, None
     return mode, tag, n, math.inf, None
+
+
+def defect_snap_candidates(P_in):
+    """Build Defect-Snapped & Band-Coalesced seeds replicating the `n=333` (`-0.007765`) unjamming mechanism!"""
+    P = RE.normalize_to_origin(P_in)
+    L = RE.side_exact(P)
+    t_mod = np.mod(P[:, 2], 0.5 * math.pi)
+    fold = np.minimum(t_mod, 0.5 * math.pi - t_mod)
+    out = []
+    for deg_cut in (5.8, 9.5, 12.5):
+        mask = (fold > math.radians(0.15)) & (fold < math.radians(deg_cut))
+        cnt = int(mask.sum())
+        if cnt > 0:
+            Q = P.copy()
+            Q[mask, 2] = 0.0
+            gx = np.clip(np.round(Q[mask, 0] - 0.5) + 0.5, 0.5, max(0.55, L - 0.5))
+            gy = np.clip(np.round(Q[mask, 1] - 0.5) + 0.5, 0.5, max(0.55, L - 0.5))
+            Q[mask, 0] = 0.80 * Q[mask, 0] + 0.20 * gx
+            Q[mask, 1] = 0.80 * Q[mask, 1] + 0.20 * gy
+            out.append((f"snap_{deg_cut:.1f}d_c{cnt}", Q))
+
+    # Also build a band-coalesced seed snapping scattered tilted angles within 8 deg of median tilt
+    hi_mask = fold >= math.radians(10.5)
+    if int(hi_mask.sum()) >= 6:
+        med_t = float(np.median(t_mod[hi_mask]))
+        da = np.minimum(
+            np.mod(t_mod - med_t, 0.5 * math.pi),
+            0.5 * math.pi - np.mod(t_mod - med_t, 0.5 * math.pi),
+        )
+        c_mask = hi_mask & (da > math.radians(0.8)) & (da < math.radians(8.5))
+        if int(c_mask.sum()) > 0:
+            Q2 = P.copy()
+            Q2[c_mask, 2] = med_t
+            out.append((f"coal_{int(c_mask.sum())}", Q2))
+    return out

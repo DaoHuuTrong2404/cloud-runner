@@ -1290,7 +1290,7 @@ fn mutate_one(
                 }
             }
         }
-        17 | _ => {
+        17 => {
             // parallel_arm_spawn: nucleate a parallel tilted row (2..5 squares) adjacent to an existing tilted row!
             let tilted: Vec<usize> = (0..n)
                 .filter(|&i| angle_dist_90(v[3 * i + 2], 0.0) > 0.01)
@@ -1350,6 +1350,69 @@ fn mutate_one(
                 d2.select_nth_unstable_by(m - 1, |a, b| a.1.partial_cmp(&b.1).unwrap());
                 for &(i, _) in &d2[..m] {
                     v[3 * i + 2] = a_new;
+                }
+            }
+        }
+        18 | _ => {
+            // snap_low_tilt_defect + band_coalesce (exact n=333 -0.007765 defect-unjamming operator!)
+            let low_hi = 12.2f64.to_radians();
+            let low_lo = 0.15f64.to_radians();
+            let low_defects: Vec<usize> = (0..n)
+                .filter(|&i| {
+                    let fd = angle_dist_90(v[3 * i + 2], 0.0);
+                    fd > low_lo && fd < low_hi
+                })
+                .collect();
+            if !low_defects.is_empty() && rng.f() < 0.62 {
+                if rng.f() < 0.38 || low_defects.len() <= 4 {
+                    for &i in &low_defects {
+                        v[3 * i + 2] = 0.0;
+                        let gx = ((v[3 * i] - 0.5).round() + 0.5).clamp(0.5, l - 0.5);
+                        let gy = ((v[3 * i + 1] - 0.5).round() + 0.5).clamp(0.5, l - 0.5);
+                        v[3 * i] = 0.82 * v[3 * i] + 0.18 * gx;
+                        v[3 * i + 1] = 0.82 * v[3 * i + 1] + 0.18 * gy;
+                    }
+                } else {
+                    let piv = low_defects[rng.idx(low_defects.len())];
+                    let (px, py) = (v[3 * piv], v[3 * piv + 1]);
+                    let mut d2: Vec<(usize, f64)> = low_defects
+                        .iter()
+                        .map(|&i| (i, (v[3 * i] - px).powi(2) + (v[3 * i + 1] - py).powi(2)))
+                        .collect();
+                    let k_snap = rng.int_range(2, low_defects.len() + 1);
+                    d2.select_nth_unstable_by(k_snap - 1, |a, b| a.1.partial_cmp(&b.1).unwrap());
+                    for &(i, _) in &d2[..k_snap] {
+                        v[3 * i + 2] = 0.0;
+                        let gx = ((v[3 * i] - 0.5).round() + 0.5).clamp(0.5, l - 0.5);
+                        let gy = ((v[3 * i + 1] - 0.5).round() + 0.5).clamp(0.5, l - 0.5);
+                        v[3 * i] = 0.84 * v[3 * i] + 0.16 * gx;
+                        v[3 * i + 1] = 0.84 * v[3 * i + 1] + 0.16 * gy;
+                    }
+                }
+            } else {
+                // Coalesce scattered tilted band angles onto a dominant tilted row angle!
+                let high_tilted: Vec<usize> = (0..n)
+                    .filter(|&i| angle_dist_90(v[3 * i + 2], 0.0) >= 10.5f64.to_radians())
+                    .collect();
+                if high_tilted.len() >= 3 {
+                    let piv = high_tilted[rng.idx(high_tilted.len())];
+                    let a_dom = v[3 * piv + 2].rem_euclid(FRAC_PI_2);
+                    let (px, py) = (v[3 * piv], v[3 * piv + 1]);
+                    let mut cand: Vec<(usize, f64)> = high_tilted
+                        .iter()
+                        .filter(|&&i| {
+                            let da = angle_dist_90(v[3 * i + 2], a_dom);
+                            da > 0.6f64.to_radians() && da < 9.5f64.to_radians()
+                        })
+                        .map(|&i| (i, (v[3 * i] - px).powi(2) + (v[3 * i + 1] - py).powi(2)))
+                        .collect();
+                    if !cand.is_empty() {
+                        let k_c = rng.int_range(1, cand.len().min(18) + 1);
+                        cand.select_nth_unstable_by(k_c - 1, |a, b| a.1.partial_cmp(&b.1).unwrap());
+                        for &(i, _) in &cand[..k_c] {
+                            v[3 * i + 2] = a_dom;
+                        }
+                    }
                 }
             }
         }
@@ -1887,7 +1950,7 @@ fn main() {
     let (n, _s_hdr, v_best) = read_cfg(&inp);
     let (mut best_legal_s, v_norm, _) = exact_side_and_max_pen(&v_best);
     let s_start = best_legal_s;
-    let seed_tilt0 = tilted_sum(&v_norm);
+    let mut seed_tilt0 = tilted_sum(&v_norm);
 
     let mut seeds: Vec<(f64, Vec<f64>)> = vec![(best_legal_s, v_norm)];
     for nf in &nbr_files {
@@ -1925,15 +1988,15 @@ fn main() {
         }
     }
 
-    // Tight compression move weights + Breathing arm-growth warmup move weights (boosts 16=arm_extend, 17=parallel_arm_spawn, 15=cluster_tilt)
-    let move_kinds: [usize; 13] = [8, 9, 16, 17, 1, 6, 2, 15, 4, 11, 3, 13, 14];
-    let move_wts_tight: [f64; 13] = [4.56, 3.98, 3.15, 1.80, 3.07, 2.33, 2.08, 1.25, 0.87, 0.84, 0.78, 0.65, 0.55];
-    let move_wts_breath: [f64; 13] = [4.10, 3.40, 5.40, 3.90, 1.20, 2.15, 1.00, 2.75, 1.40, 1.15, 0.80, 1.85, 1.65];
-    let mut move_cdf_tight = Vec::with_capacity(13);
-    let mut move_cdf_breath = Vec::with_capacity(13);
+    // Tight compression + Breathing arm-growth/defect-snap move weights (18 = snap_low_tilt_defect + band_coalesce!)
+    let move_kinds: [usize; 14] = [8, 9, 16, 17, 18, 1, 6, 2, 15, 4, 11, 3, 13, 14];
+    let move_wts_tight: [f64; 14] = [4.56, 3.98, 3.05, 1.75, 2.25, 3.00, 2.30, 2.05, 1.25, 0.87, 0.84, 0.78, 0.65, 0.55];
+    let move_wts_breath: [f64; 14] = [4.00, 3.35, 5.20, 3.70, 4.30, 1.15, 2.10, 0.95, 2.75, 1.40, 1.15, 0.80, 1.85, 1.65];
+    let mut move_cdf_tight = Vec::with_capacity(14);
+    let mut move_cdf_breath = Vec::with_capacity(14);
     let mut acc_t = 0.0;
     let mut acc_b = 0.0;
-    for k in 0..13 {
+    for k in 0..14 {
         acc_t += move_wts_tight[k];
         acc_b += move_wts_breath[k];
         move_cdf_tight.push(acc_t);
@@ -2059,6 +2122,8 @@ fn main() {
                     if mp <= 1e-12 && s_ex < best_legal_s - 1e-10 {
                         best_legal_s = s_ex;
                         wins += 1;
+                        seeds[0] = (best_legal_s, vn.clone());
+                        seed_tilt0 = tilted_sum(&vn);
                         write_cfg_atomic(&out, best_legal_s, &vn);
                     }
                 }
@@ -2106,14 +2171,14 @@ fn main() {
             }
         }
 
-        // Pressure-Ladder Replica Exchange (Odriozola / Basurto downward injection every 10 gens!)
-        if gen % 10 == 9 && n_islands >= 2 {
+        // Two-Stage Stepwise Replica Exchange (Odriozola / Basurto downward injection every 8 gens!)
+        if gen % 8 == 7 && n_islands >= 2 {
             let champ_descs: Vec<[f32; 128]> =
                 (0..n_islands).map(|i| descriptor(&isl[i].pop[0], isl[i].l)).collect();
-            let mut rep_targets: Vec<usize> = Vec::new();
-            let mut rep_batch: Vec<(Vec<f64>, f64, Option<f64>, usize, f64)> = Vec::new();
+            let mut rep_pairs: Vec<(usize, usize)> = Vec::new();
+            let mut mid_batch: Vec<(Vec<f64>, f64, Option<f64>, usize, f64)> = Vec::new();
             for hi in 0..n_islands {
-                if isl[hi].sym != 0 || isl[hi].e0 > thr * 2.5 {
+                if isl[hi].sym != 0 || isl[hi].e0 > thr * 4.0 {
                     continue;
                 }
                 for lo in 0..n_islands {
@@ -2121,12 +2186,13 @@ fn main() {
                         continue;
                     }
                     let dl = isl[hi].l - isl[lo].l;
-                    if dl > 4.0e-5 && dl <= 0.0075 {
-                        if desc_l1(&champ_descs[hi], &champ_descs[lo]) >= 0.30 {
-                            rep_targets.push(lo);
-                            rep_batch.push((
-                                rescale_vec(&isl[hi].pop[0], isl[hi].l, isl[lo].l),
-                                isl[lo].l,
+                    if dl > 3.0e-5 && dl <= 0.0095 {
+                        if desc_l1(&champ_descs[hi], &champ_descs[lo]) >= 0.25 {
+                            let l_mid = 0.5 * (isl[hi].l + isl[lo].l);
+                            rep_pairs.push((hi, lo));
+                            mid_batch.push((
+                                rescale_vec(&isl[hi].pop[0], isl[hi].l, l_mid),
+                                l_mid,
                                 None,
                                 0,
                                 f64::INFINITY,
@@ -2135,20 +2201,38 @@ fn main() {
                     }
                 }
             }
-            if !rep_batch.is_empty() {
+            if !mid_batch.is_empty() {
+                relax_batch_parallel(&mut mid_batch, 120, 1e-26, nthreads);
+                let mut rep_batch: Vec<(Vec<f64>, f64, Option<f64>, usize, f64)> = rep_pairs
+                    .iter()
+                    .enumerate()
+                    .map(|(k_r, &(_hi, lo))| {
+                        let l_mid = mid_batch[k_r].1;
+                        let l_lo = isl[lo].l;
+                        (
+                            rescale_vec(&mid_batch[k_r].0, l_mid, l_lo),
+                            l_lo,
+                            None,
+                            0,
+                            f64::INFINITY,
+                        )
+                    })
+                    .collect();
                 relax_batch_parallel(&mut rep_batch, 240, 1e-26, nthreads);
-                for (k_rep, &lo) in rep_targets.iter().enumerate() {
+                for (k_rep, &(_hi, lo)) in rep_pairs.iter().enumerate() {
                     let (ref rv, rl, _, _, re) = rep_batch[k_rep];
                     if re <= 1e-22 && rl < best_legal_s - 1e-10 {
                         let (s_ex, vn, mp) = exact_side_and_max_pen(rv);
                         if mp <= 1e-12 && s_ex < best_legal_s - 1e-10 {
                             best_legal_s = s_ex;
                             wins += 1;
+                            seeds[0] = (best_legal_s, vn.clone());
+                            seed_tilt0 = tilted_sum(&vn);
                             write_cfg_atomic(&out, best_legal_s, &vn);
                         }
                     }
-                    let med_e = isl[lo].ene[isl[lo].ene.len() / 2];
-                    if re < med_e {
+                    let worst_e = isl[lo].ene.last().copied().unwrap_or(f64::INFINITY);
+                    if re <= worst_e * 2.5 {
                         let mut xa = isl[lo].pop.clone();
                         let mut ea = isl[lo].ene.clone();
                         xa.push(rv.clone());
@@ -2176,6 +2260,8 @@ fn main() {
                         if mp <= 1e-12 && s_ex < best_legal_s - 1e-10 {
                             best_legal_s = s_ex;
                             wins += 1;
+                            seeds[0] = (best_legal_s, vn.clone());
+                            seed_tilt0 = tilted_sum(&vn);
                             write_cfg_atomic(&out, best_legal_s, &vn);
                         }
                     }
@@ -2189,7 +2275,6 @@ fn main() {
             if ii == best_isl || gen < isl[ii].hold_until {
                 continue;
             }
-            let age = gen.saturating_sub(isl[ii].born);
             let stall = gen.saturating_sub(isl[ii].last_imp);
             if stall > r_stall && isl[ii].sym >= 2 && !isl[ii].released && rng.f() < 0.55 {
                 if let Some(jj) = (0..n_islands)
