@@ -786,7 +786,7 @@ def run_santa_ga(
             str(int(threads)),
         ]
         for ni, Pn in enumerate(nbr_packings or []):
-            if Pn is not None and len(Pn) >= len(P):
+            if Pn is not None and len(Pn) >= max(1, len(P) - 4):
                 fn = os.path.join(tmp, f"nbr_{ni}.txt")
                 write_packer_cfg(fn, side_exact(Pn), Pn)
                 cmd += ["--nbr", fn]

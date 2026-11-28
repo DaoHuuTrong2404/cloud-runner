@@ -2118,6 +2118,102 @@ fn select_diverse(
     (out_x, out_e)
 }
 
+fn bisection_squeeze_one(
+    v_start: &[f64],
+    best_legal_s: f64,
+    buf: &mut LbfgsBuf,
+    t_dl: Instant,
+) -> (f64, Vec<f64>, f64) {
+    let (mut cur_s, mut cur_v, mut cur_mp) = exact_side_and_max_pen(v_start);
+    let n = cur_v.len() / 3;
+    if cur_mp > 1e-12 {
+        for k in 0..6usize {
+            if Instant::now() >= t_dl {
+                break;
+            }
+            let s_inf = cur_s * (1.0 + 1.5e-4 * ((1usize << k) as f64));
+            let mut vt = fit_box(&cur_v, s_inf);
+            let mut sys_i = Sys::new(n, s_inf);
+            let ei = lbfgs_relax_buf(&mut sys_i, buf, &mut vt, 4200, 1e-26, 95, None, None, None, None);
+            if ei <= 1e-22 {
+                let (sx, vx, mpx) = exact_side_and_max_pen(&vt);
+                if mpx <= 1e-12 {
+                    cur_s = sx;
+                    cur_v = vx;
+                    cur_mp = mpx;
+                    break;
+                }
+            }
+        }
+        if cur_mp > 1e-12 {
+            return (cur_s, cur_v, cur_mp);
+        }
+    }
+
+    let mut rel = if cur_s > best_legal_s {
+        (((cur_s - best_legal_s) / cur_s) * 0.65).clamp(2.5e-4, 2.5e-3)
+    } else {
+        3.5e-4
+    };
+    let mut w_sq = vec![1.0f64; n];
+    let mut pen_sq = vec![0.0f64; n];
+    for _sq_it in 0..44 {
+        if rel < 3e-10 || Instant::now() >= t_dl {
+            break;
+        }
+        let s_try = cur_s * (1.0 - rel);
+        if s_try <= 1.05 {
+            rel *= 0.35;
+            continue;
+        }
+        let mut vt = fit_box(&cur_v, s_try);
+        let mut sys_t = Sys::new(n, s_try);
+        let et = lbfgs_relax_buf(&mut sys_t, buf, &mut vt, 5200, 1e-26, 90, None, None, None, None);
+        if et > 1e-22 && Instant::now() < t_dl {
+            let (_, _, mpt) = exact_side_and_max_pen(&vt);
+            if mpt < 1.2e-2 {
+                w_sq.fill(1.0);
+                for _rnd in 0..4 {
+                    lbfgs_relax_buf(
+                        &mut sys_t,
+                        buf,
+                        &mut vt,
+                        320,
+                        1e-26,
+                        35,
+                        None,
+                        Some(&w_sq),
+                        Some(&mut pen_sq),
+                        None,
+                    );
+                    let max_p = pen_sq.iter().cloned().fold(0.0f64, f64::max);
+                    if max_p <= 1e-12 {
+                        break;
+                    }
+                    for i in 0..n {
+                        if pen_sq[i] > 1.5e-6 {
+                            w_sq[i] = (w_sq[i] * 2.0).min(1e3);
+                        } else {
+                            w_sq[i] = (w_sq[i] * 0.9).max(1.0);
+                        }
+                    }
+                }
+                lbfgs_relax_buf(&mut sys_t, buf, &mut vt, 900, 1e-26, 45, None, None, None, None);
+            }
+        }
+        let (sx, vx, mpx) = exact_side_and_max_pen(&vt);
+        if mpx <= 1e-12 && sx < cur_s - 1e-12 {
+            cur_s = sx;
+            cur_v = vx;
+            cur_mp = mpx;
+            rel = (rel * 1.75).min(2.5e-3);
+        } else {
+            rel *= 0.32;
+        }
+    }
+    (cur_s, cur_v, cur_mp)
+}
+
 fn synthesize_upward_insert_seeds(
     vm: &[f64],
     m: usize,
@@ -2126,98 +2222,299 @@ fn synthesize_upward_insert_seeds(
     nthreads: usize,
     rng: &mut Rng,
 ) -> Vec<(f64, Vec<f64>, f64)> {
+    let t_dl = Instant::now() + std::time::Duration::from_secs_f64(32.0);
     let add = n - m;
     let (sm, vmn, _) = exact_side_and_max_pen(vm);
-    let l_base = best_legal_s.max(sm) + 0.0028;
-    let p_base = rescale_vec(&vmn, sm, l_base);
     let tilted: Vec<usize> = (0..m)
-        .filter(|&i| angle_dist_90(p_base[3 * i + 2], 0.0) > 0.02)
+        .filter(|&i| angle_dist_90(vmn[3 * i + 2], 0.0) > 0.02)
         .collect();
     let a_dom = if !tilted.is_empty() {
-        p_base[3 * tilted[rng.idx(tilted.len())] + 2].rem_euclid(FRAC_PI_2)
+        vmn[3 * tilted[rng.idx(tilted.len())] + 2].rem_euclid(FRAC_PI_2)
     } else {
         FRAC_PI_4
     };
-    let ang_choices = [
-        0.0,
-        a_dom,
-        (a_dom + 0.5 * FRAC_PI_2).rem_euclid(FRAC_PI_2),
-        FRAC_PI_4,
-        0.0,
-        a_dom,
-    ];
-    let hi_c = (l_base - 0.55).max(0.60);
-    let mut raw_cands: Vec<Vec<f64>> = Vec::with_capacity(10);
 
-    // 6 Voronoi max-clearance pocket insertions
-    for ci in 0..6 {
-        let mut vk = p_base.clone();
-        for a_step in 0..add {
-            let cur_m = vk.len() / 3;
-            let mut best_pt = (0.5 * l_base, 0.5 * l_base);
-            let mut best_d2 = -1.0f64;
-            for _ in 0..96 {
-                let qx = rng.uniform(0.55, hi_c);
-                let qy = rng.uniform(0.55, hi_c);
-                let mut md2 = f64::INFINITY;
-                for j in 0..cur_m {
-                    let dx = vk[3 * j] - qx;
-                    let dy = vk[3 * j + 1] - qy;
-                    md2 = md2.min(dx * dx + dy * dy);
-                }
-                if md2 > best_d2 {
-                    best_d2 = md2;
-                    best_pt = (qx, qy);
-                }
-            }
-            let ang = ang_choices[(ci + a_step) % ang_choices.len()];
-            vk.extend_from_slice(&[best_pt.0, best_pt.1, ang]);
-        }
-        raw_cands.push(vk);
-    }
+    let l_tight = (best_legal_s - 2.5e-4).max(1.2);
+    let l_mid = best_legal_s.max(sm) + 0.0045;
+    let l_wide = best_legal_s.max(sm) + 0.0110;
+    let box_targets = [l_tight, l_mid, l_wide];
 
-    // 4 Tilted-seam / arm-tip insertions with gentle neighbor nudge
-    for ci in 0..4 {
-        let mut vk = p_base.clone();
-        for _ in 0..add {
-            let cur_m = vk.len() / 3;
-            let i0 = if !tilted.is_empty() {
-                tilted[rng.idx(tilted.len())]
+    let mut cands: Vec<(Vec<f64>, f64, f64)> = Vec::with_capacity(36);
+    for (bi, &l_box) in box_targets.iter().enumerate() {
+        let slack = (l_box - sm).max(0.0);
+        let hi_c = (l_box - 0.505).max(0.55);
+        for mode in 0..12usize {
+            let mut vk: Vec<f64> = if sm <= l_box + 0.008 && mode < 10 {
+                let mut v_sh = vmn.clone();
+                match mode {
+                    0 | 7 => {}
+                    1 | 8 => {
+                        for i in 0..m {
+                            v_sh[3 * i] += slack;
+                            v_sh[3 * i + 1] += slack;
+                        }
+                    }
+                    2 => {
+                        for i in 0..m {
+                            v_sh[3 * i] += slack;
+                        }
+                    }
+                    3 => {
+                        for i in 0..m {
+                            v_sh[3 * i + 1] += slack;
+                        }
+                    }
+                    4 | 9 => {
+                        for i in 0..m {
+                            v_sh[3 * i] += 0.5 * slack;
+                            v_sh[3 * i + 1] += 0.5 * slack;
+                        }
+                    }
+                    5 => {
+                        let xcut = rng.uniform(0.22 * sm, 0.78 * sm);
+                        for i in 0..m {
+                            if v_sh[3 * i] > xcut {
+                                v_sh[3 * i] += slack;
+                            }
+                        }
+                    }
+                    _ => {
+                        let ycut = rng.uniform(0.22 * sm, 0.78 * sm);
+                        for i in 0..m {
+                            if v_sh[3 * i + 1] > ycut {
+                                v_sh[3 * i + 1] += slack;
+                            }
+                        }
+                    }
+                }
+                v_sh
             } else {
-                rng.idx(cur_m)
+                fit_box(&vmn, l_box)
             };
-            let a0 = vk[3 * i0 + 2].rem_euclid(FRAC_PI_2);
-            let dr = a0 + ((ci % 4) as f64) * FRAC_PI_2;
-            let (uy, ux) = dr.sin_cos();
-            let qx = (vk[3 * i0] + ux).clamp(0.52, hi_c);
-            let qy = (vk[3 * i0 + 1] + uy).clamp(0.52, hi_c);
-            for j in 0..cur_m {
-                let dx = vk[3 * j] - qx;
-                let dy = vk[3 * j + 1] - qy;
-                let d2 = dx * dx + dy * dy;
-                if d2 > 1e-6 && d2 < 1.44 {
-                    let inv = 0.08 / d2.sqrt();
-                    vk[3 * j] = (vk[3 * j] + dx * inv).clamp(0.5, l_base - 0.5);
-                    vk[3 * j + 1] = (vk[3 * j + 1] + dy * inv).clamp(0.5, l_base - 0.5);
-                }
+
+            for a_step in 0..add {
+                let cur_m = vk.len() / 3;
+                let (qx, qy, ang_ins) = if mode >= 9 && !tilted.is_empty() {
+                    let i0 = tilted[rng.idx(tilted.len())];
+                    let a0 = vk[3 * i0 + 2].rem_euclid(FRAC_PI_2);
+                    let dr = a0 + (((mode + a_step + bi) % 4) as f64) * FRAC_PI_2;
+                    let (uy, ux) = dr.sin_cos();
+                    let px = (vk[3 * i0] + ux).clamp(0.505, hi_c);
+                    let py = (vk[3 * i0 + 1] + uy).clamp(0.505, hi_c);
+                    for j in 0..cur_m {
+                        let dx = vk[3 * j] - px;
+                        let dy = vk[3 * j + 1] - py;
+                        let d2 = dx * dx + dy * dy;
+                        if d2 > 1e-6 && d2 < 1.44 {
+                            let inv = 0.08 / d2.sqrt();
+                            vk[3 * j] = (vk[3 * j] + dx * inv).clamp(0.5, l_box - 0.5);
+                            vk[3 * j + 1] = (vk[3 * j + 1] + dy * inv).clamp(0.5, l_box - 0.5);
+                        }
+                    }
+                    let ai = if (mode + a_step) % 2 == 0 { a0 } else { 0.0 };
+                    (px, py, ai)
+                } else {
+                    let mut top_spots: Vec<(f64, f64, f64)> = Vec::with_capacity(4);
+                    for pr in 0..640usize {
+                        let (px, py) = if slack > 0.008 && pr < 96 {
+                            if pr % 2 == 0 {
+                                (
+                                    rng.uniform((l_box - slack - 0.85).max(0.505), hi_c),
+                                    rng.uniform(0.505, hi_c),
+                                )
+                            } else {
+                                (
+                                    rng.uniform(0.505, hi_c),
+                                    rng.uniform((l_box - slack - 0.85).max(0.505), hi_c),
+                                )
+                            }
+                        } else {
+                            (rng.uniform(0.505, hi_c), rng.uniform(0.505, hi_c))
+                        };
+                        let mut md2 = f64::INFINITY;
+                        for j in 0..cur_m {
+                            let dx = vk[3 * j] - px;
+                            let dy = vk[3 * j + 1] - py;
+                            md2 = md2.min(dx * dx + dy * dy);
+                        }
+                        let mut near_existing = false;
+                        for &(sx, sy, sd2) in &top_spots {
+                            if (sx - px) * (sx - px) + (sy - py) * (sy - py) < 1.10 && md2 <= sd2 {
+                                near_existing = true;
+                                break;
+                            }
+                        }
+                        if near_existing {
+                            continue;
+                        }
+                        if top_spots.len() < 4 {
+                            top_spots.push((px, py, md2));
+                            top_spots.sort_by(|a, b| {
+                                b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                        } else if md2 > top_spots[3].2 {
+                            top_spots[3] = (px, py, md2);
+                            top_spots.sort_by(|a, b| {
+                                b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                        }
+                    }
+                    let (bx, by) = if top_spots.is_empty() {
+                        (0.5 * l_box, 0.5 * l_box)
+                    } else {
+                        let pick = (mode + a_step + bi) % top_spots.len();
+                        (top_spots[pick].0, top_spots[pick].1)
+                    };
+                    let mut near_j = 0usize;
+                    let mut near_d2 = f64::INFINITY;
+                    for j in 0..cur_m {
+                        let dx = vk[3 * j] - bx;
+                        let dy = vk[3 * j + 1] - by;
+                        let d2 = dx * dx + dy * dy;
+                        if d2 < near_d2 {
+                            near_d2 = d2;
+                            near_j = j;
+                        }
+                    }
+                    let a_near = vk[3 * near_j + 2].rem_euclid(FRAC_PI_2);
+                    let ai = match (mode + a_step) % 5 {
+                        0 | 1 | 2 => a_near,
+                        3 => 0.0,
+                        _ => a_dom,
+                    };
+                    (bx, by, ai)
+                };
+                vk.extend_from_slice(&[qx, qy, ang_ins]);
             }
-            let ang_ins = if ci % 2 == 0 { a0 } else { 0.0 };
-            vk.extend_from_slice(&[qx, qy, ang_ins]);
+            cands.push((vk, l_box, f64::INFINITY));
         }
-        raw_cands.push(vk);
     }
 
-    let l_tight = (best_legal_s - 0.0012).max(sm + 1e-4);
-    let l_breath = best_legal_s.max(sm) + 0.0048;
-    let mut leg_batch: Vec<(Vec<f64>, f64, f64)> = Vec::with_capacity(raw_cands.len() * 2);
-    for rc in &raw_cands {
-        leg_batch.push((rescale_vec(rc, l_base, l_tight), l_tight, f64::INFINITY));
-        leg_batch.push((rescale_vec(rc, l_base, l_breath), l_breath, f64::INFINITY));
-    }
-    gls_legalize_batch(&mut leg_batch, nthreads);
+    let dim = 3 * n;
+    let nt1 = nthreads.max(1).min(cands.len().max(1));
+    let csz1 = (cands.len() + nt1 - 1) / nt1;
+    thread::scope(|s| {
+        for chunk in cands.chunks_mut(csz1) {
+            s.spawn(move || {
+                let mut buf = LbfgsBuf::new(dim, 12);
+                for item in chunk.iter_mut() {
+                    let mut sys = Sys::new(n, item.1);
+                    item.2 = lbfgs_relax_buf(
+                        &mut sys,
+                        &mut buf,
+                        &mut item.0,
+                        1400,
+                        1e-26,
+                        55,
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                }
+            });
+        }
+    });
 
-    let mut scored: Vec<(u8, f64, f64, Vec<f64>, f64)> = Vec::with_capacity(leg_batch.len());
-    for (lv, _, _) in leg_batch {
+    cands.sort_by(|a, b| {
+        let ta = if a.2 <= 1e-22 { 0u8 } else { 1u8 };
+        let tb = if b.2 <= 1e-22 { 0u8 } else { 1u8 };
+        let ka = if ta == 0 { exact_bbox_side(&a.0) } else { a.2 };
+        let kb = if tb == 0 { exact_bbox_side(&b.0) } else { b.2 };
+        ta.cmp(&tb)
+            .then_with(|| ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    cands.truncate(12);
+
+    let nt2 = nthreads.max(1).min(cands.len().max(1));
+    let csz2 = (cands.len() + nt2 - 1) / nt2;
+    thread::scope(|s| {
+        for chunk in cands.chunks_mut(csz2) {
+            s.spawn(move || {
+                let mut buf = LbfgsBuf::new(dim, 12);
+                let mut w_sq = vec![1.0f64; n];
+                let mut pen_sq = vec![0.0f64; n];
+                for item in chunk.iter_mut() {
+                    if Instant::now() >= t_dl {
+                        break;
+                    }
+                    let mut sys = Sys::new(n, item.1);
+                    if item.2 > 1e-24 {
+                        item.2 = lbfgs_relax_buf(
+                            &mut sys,
+                            &mut buf,
+                            &mut item.0,
+                            16000,
+                            1e-26,
+                            160,
+                            None,
+                            None,
+                            None,
+                            None,
+                        );
+                    }
+                    if item.2 > 1e-22 && Instant::now() < t_dl {
+                        let (_, _, mp0) = exact_side_and_max_pen(&item.0);
+                        if mp0 < 0.08 {
+                            w_sq.fill(1.0);
+                            for _rnd in 0..7 {
+                                if Instant::now() >= t_dl {
+                                    break;
+                                }
+                                lbfgs_relax_buf(
+                                    &mut sys,
+                                    &mut buf,
+                                    &mut item.0,
+                                    500,
+                                    1e-26,
+                                    45,
+                                    None,
+                                    Some(&w_sq),
+                                    Some(&mut pen_sq),
+                                    None,
+                                );
+                                let max_p = pen_sq.iter().cloned().fold(0.0f64, f64::max);
+                                if max_p <= 1e-12 {
+                                    break;
+                                }
+                                for i in 0..n {
+                                    if pen_sq[i] > 1.5e-6 {
+                                        w_sq[i] = (w_sq[i] * 2.0).min(2e3);
+                                    } else {
+                                        w_sq[i] = (w_sq[i] * 0.9).max(1.0);
+                                    }
+                                }
+                            }
+                            item.2 = lbfgs_relax_buf(
+                                &mut sys,
+                                &mut buf,
+                                &mut item.0,
+                                2200,
+                                1e-26,
+                                110,
+                                None,
+                                None,
+                                None,
+                                None,
+                            );
+                        }
+                    }
+                    if Instant::now() < t_dl {
+                        let (sq_s, sq_v, sq_mp) =
+                            bisection_squeeze_one(&item.0, best_legal_s, &mut buf, t_dl);
+                        if sq_mp <= 1e-12 {
+                            item.0 = sq_v;
+                            item.1 = sq_s;
+                            item.2 = 0.0;
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let mut scored: Vec<(u8, f64, f64, Vec<f64>, f64)> = Vec::with_capacity(cands.len());
+    for (lv, _, _) in cands {
         let (sk, vkn, mp) = exact_side_and_max_pen(&lv);
         let tier = if mp <= 1e-12 { 0u8 } else if mp <= 2e-3 { 1u8 } else { 2u8 };
         scored.push((tier, sk + 25.0 * mp, sk, vkn, mp));
@@ -2289,10 +2586,10 @@ fn main() {
                         sk.max(best_legal_s) + 1e-5
                     };
                     seeds.push((s_eff, vkn));
-                } else if m < n && n - m <= 3 {
+                } else if m < n && n - m <= 4 {
                     let up_cands =
                         synthesize_upward_insert_seeds(&vm, m, n, best_legal_s, nthreads, &mut rng);
-                    for (sk, vkn, mp_u) in up_cands.into_iter().take(4) {
+                    for (sk, vkn, mp_u) in up_cands.into_iter().take(5) {
                         if mp_u <= 1e-12 && sk < best_legal_s - 1e-10 {
                             best_legal_s = sk;
                             wins += 1;
