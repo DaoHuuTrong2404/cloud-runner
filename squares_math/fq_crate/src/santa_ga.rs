@@ -426,6 +426,7 @@ fn lbfgs_relax_buf(
     ecut: Option<f64>,
     w_sq: Option<&[f64]>,
     mut pen_out: Option<&mut [f64]>,
+    pin_ang: Option<&[u16]>,
 ) -> f64 {
     let dim = v.len();
     buf.clear();
@@ -438,6 +439,11 @@ fn lbfgs_relax_buf(
     } else {
         sys.energy(v, &mut buf.g)
     };
+    if let Some(pins) = pin_ang {
+        for &p in pins {
+            buf.g[3 * (p as usize) + 2] = 0.0;
+        }
+    }
     let mut fails = 0usize;
 
     for it in 0..maxit {
@@ -517,6 +523,11 @@ fn lbfgs_relax_buf(
             } else {
                 sys.energy(&buf.xn, &mut buf.gn)
             };
+            if let Some(pins) = pin_ang {
+                for &p in pins {
+                    buf.gn[3 * (p as usize) + 2] = 0.0;
+                }
+            }
             if en <= e + 1e-4 * step * gd {
                 buf.push_pair(v);
                 v.copy_from_slice(&buf.xn);
@@ -979,7 +990,8 @@ fn mutate_one(
     kind: usize,
     res_cdf: Option<&[f64]>,
     rng: &mut Rng,
-) {
+) -> Vec<u16> {
+    let mut pinned: Vec<u16> = Vec::new();
     let n = v.len() / 3;
     let pick_sq = |rng: &mut Rng| -> usize {
         if let Some(cdf) = res_cdf {
@@ -1287,6 +1299,11 @@ fn mutate_one(
                             }
                         }
                     }
+                    if rng.f() < 0.78 {
+                        for &cj in &converted {
+                            pinned.push(cj as u16);
+                        }
+                    }
                 }
             }
         }
@@ -1332,6 +1349,11 @@ fn mutate_one(
                         used.push(best_j);
                     }
                 }
+                if rng.f() < 0.82 {
+                    for &uj in &used {
+                        pinned.push(uj as u16);
+                    }
+                }
             } else {
                 // Pure grid fallback: tilt a small collinear strip of 3..5 squares at strip-law angle
                 let i0 = rng.idx(n);
@@ -1350,6 +1372,104 @@ fn mutate_one(
                 d2.select_nth_unstable_by(m - 1, |a, b| a.1.partial_cmp(&b.1).unwrap());
                 for &(i, _) in &d2[..m] {
                     v[3 * i + 2] = a_new;
+                    pinned.push(i as u16);
+                }
+            }
+        }
+        19 => {
+            // pinned_pair_tilt: angle-pinned 1..3 adjacent square nucleation (direct lns.py kind 8/9 in Rust!)
+            let i0 = pick_sq(rng);
+            let (x0, y0) = (v[3 * i0], v[3 * i0 + 1]);
+            let k_pin = rng.int_range(1, 4).min(n);
+            let mut d2: Vec<(usize, f64)> = (0..n)
+                .map(|i| (i, (v[3 * i] - x0).powi(2) + (v[3 * i + 1] - y0).powi(2)))
+                .collect();
+            d2.select_nth_unstable_by(k_pin - 1, |a, b| a.1.partial_cmp(&b.1).unwrap());
+            let high_tilted: Vec<usize> = (0..n)
+                .filter(|&i| angle_dist_90(v[3 * i + 2], 0.0) >= 8.0f64.to_radians())
+                .collect();
+            let use_dom = !high_tilted.is_empty() && rng.f() < 0.55;
+            let a_dom = if use_dom {
+                let piv = high_tilted[rng.idx(high_tilted.len())];
+                v[3 * piv + 2].rem_euclid(FRAC_PI_2)
+            } else {
+                let sgn = if rng.f() < 0.5 { 1.0 } else { -1.0 };
+                (v[3 * i0 + 2] + sgn * rng.uniform(8.0, 32.0).to_radians()).rem_euclid(FRAC_PI_2)
+            };
+            for &(j, _) in &d2[..k_pin] {
+                v[3 * j + 2] = a_dom;
+                pinned.push(j as u16);
+            }
+            for &(cj, _) in &d2[..k_pin] {
+                let (cx, cy) = (v[3 * cj], v[3 * cj + 1]);
+                for k in 0..n {
+                    if !pinned.contains(&(k as u16)) {
+                        let dx = v[3 * k] - cx;
+                        let dy = v[3 * k + 1] - cy;
+                        let dd = dx * dx + dy * dy;
+                        if dd > 1e-6 && dd < 1.35 {
+                            let inv = 0.065 / dd.sqrt();
+                            v[3 * k] += dx * inv;
+                            v[3 * k + 1] += dy * inv;
+                        }
+                    }
+                }
+            }
+        }
+        20 => {
+            // band_pca_wave: collective PCA principal/transverse angle wave across tilted band (lns.py band_angles!)
+            let tilted: Vec<usize> = (0..n)
+                .filter(|&i| angle_dist_90(v[3 * i + 2], 0.0) > 0.015)
+                .collect();
+            if tilted.len() >= 3 {
+                let m = tilted.len() as f64;
+                let mx = tilted.iter().map(|&i| v[3 * i]).sum::<f64>() / m;
+                let my = tilted.iter().map(|&i| v[3 * i + 1]).sum::<f64>() / m;
+                let mut cxx = 0.0f64;
+                let mut cxy = 0.0f64;
+                let mut cyy = 0.0f64;
+                for &i in &tilted {
+                    let dx = v[3 * i] - mx;
+                    let dy = v[3 * i + 1] - my;
+                    cxx += dx * dx;
+                    cxy += dx * dy;
+                    cyy += dy * dy;
+                }
+                let th_pca = 0.5 * (2.0 * cxy).atan2(cxx - cyy);
+                let (uy, ux) = th_pca.sin_cos();
+                let mut s_par: Vec<f64> = Vec::with_capacity(tilted.len());
+                let mut s_perp: Vec<f64> = Vec::with_capacity(tilted.len());
+                let (mut smin, mut smax) = (f64::INFINITY, f64::NEG_INFINITY);
+                for &i in &tilted {
+                    let dx = v[3 * i] - mx;
+                    let dy = v[3 * i + 1] - my;
+                    let sp = dx * ux + dy * uy;
+                    let sq = -dx * uy + dy * ux;
+                    smin = smin.min(sp);
+                    smax = smax.max(sp);
+                    s_par.push(sp);
+                    s_perp.push(sq);
+                }
+                let span = (smax - smin).max(1e-6);
+                let amp = rng.uniform(0.35, 2.80).to_radians() * if rng.f() < 0.5 { 1.0 } else { -1.0 };
+                let phase = rng.uniform(0.0, 2.0 * PI);
+                let sub = rng.idx(3);
+                for (idx_t, &i) in tilted.iter().enumerate() {
+                    let tn = 2.0 * (s_par[idx_t] - smin) / span - 1.0;
+                    let dth = match sub {
+                        0 => amp * (PI * tn + phase).sin(),
+                        1 => amp * tn,
+                        _ => {
+                            let rung = s_perp[idx_t].round() as i32;
+                            if rung.rem_euclid(2) == 0 { amp } else { -amp }
+                        }
+                    };
+                    v[3 * i + 2] += dth;
+                }
+                if tilted.len() <= 64 && rng.f() < 0.45 {
+                    for &i in &tilted {
+                        pinned.push(i as u16);
+                    }
                 }
             }
         }
@@ -1417,6 +1537,7 @@ fn mutate_one(
             }
         }
     }
+    pinned
 }
 
 fn crossover_one(child: &mut [f64], mate: &[f64], l: f64, rng: &mut Rng) {
@@ -1595,12 +1716,78 @@ fn relax_batch_parallel(
                         item.2,
                         None,
                         None,
+                        None,
                     );
                     if item.3 >= 2 {
                         mirror_average(&mut item.0, n, item.3 - 2);
                         e = sys.energy(&item.0, &mut g_tmp);
                     }
                     item.4 = e;
+                }
+            });
+        }
+    });
+}
+
+// Tuple: (coords, box_l, ecut_opt, sym_code, pinned_sq, out_energy)
+fn relax_children_parallel(
+    batch: &mut [(Vec<f64>, f64, Option<f64>, usize, Vec<u16>, f64)],
+    maxit: usize,
+    stop: f64,
+    nthreads: usize,
+) {
+    let len = batch.len();
+    if len == 0 {
+        return;
+    }
+    let dim = batch[0].0.len();
+    let nt = nthreads.max(1).min(len);
+    let chunk_sz = (len + nt - 1) / nt;
+    thread::scope(|s| {
+        for chunk in batch.chunks_mut(chunk_sz) {
+            s.spawn(move || {
+                let mut buf = LbfgsBuf::new(dim, 6);
+                let mut g_tmp = vec![0.0; dim];
+                for item in chunk.iter_mut() {
+                    let n = item.0.len() / 3;
+                    if !item.4.is_empty() && item.3 == 0 {
+                        // Phase 1: Angle-pinned L-BFGS in slightly loosened box so grid slides out of the way!
+                        let mut sys_pin = Sys::new(n, item.1 + 0.0020);
+                        lbfgs_relax_buf(
+                            &mut sys_pin,
+                            &mut buf,
+                            &mut item.0,
+                            70,
+                            1e-22,
+                            14,
+                            None,
+                            None,
+                            None,
+                            Some(&item.4),
+                        );
+                        for sq_i in 0..n {
+                            item.0[3 * sq_i] = item.0[3 * sq_i].clamp(0.5, item.1 - 0.5);
+                            item.0[3 * sq_i + 1] = item.0[3 * sq_i + 1].clamp(0.5, item.1 - 0.5);
+                        }
+                    }
+                    let mut sys = Sys::new(n, item.1);
+                    let mut e = lbfgs_relax_buf(
+                        &mut sys,
+                        &mut buf,
+                        &mut item.0,
+                        maxit,
+                        stop,
+                        18,
+                        item.2,
+                        None,
+                        None,
+                        None,
+                    );
+                    if item.3 >= 2 {
+                        mirror_average(&mut item.0, n, item.3 - 2);
+                        e = sys.energy(&item.0, &mut g_tmp);
+                    }
+                    item.5 = e;
                 }
             });
         }
@@ -1665,6 +1852,7 @@ fn gls_legalize_batch(
                         None,
                         None,
                         None,
+                        None,
                     );
                     if e > 1e-22 {
                         let (_, _, mp0) = exact_side_and_max_pen(&item.0);
@@ -1683,6 +1871,7 @@ fn gls_legalize_batch(
                                     None,
                                     Some(&w_sq),
                                     Some(&mut pen_sq),
+                                    None,
                                 );
                                 let max_p = pen_sq.iter().cloned().fold(0.0f64, f64::max);
                                 if max_p <= 1e-12 {
@@ -1703,6 +1892,7 @@ fn gls_legalize_batch(
                                 450,
                                 1e-26,
                                 22,
+                                None,
                                 None,
                                 None,
                                 None,
@@ -1988,15 +2178,15 @@ fn main() {
         }
     }
 
-    // Tight compression + Breathing arm-growth/defect-snap move weights (18 = snap_low_tilt_defect + band_coalesce!)
-    let move_kinds: [usize; 14] = [8, 9, 16, 17, 18, 1, 6, 2, 15, 4, 11, 3, 13, 14];
-    let move_wts_tight: [f64; 14] = [4.56, 3.98, 3.05, 1.75, 2.25, 3.00, 2.30, 2.05, 1.25, 0.87, 0.84, 0.78, 0.65, 0.55];
-    let move_wts_breath: [f64; 14] = [4.00, 3.35, 5.20, 3.70, 4.30, 1.15, 2.10, 0.95, 2.75, 1.40, 1.15, 0.80, 1.85, 1.65];
-    let mut move_cdf_tight = Vec::with_capacity(14);
-    let mut move_cdf_breath = Vec::with_capacity(14);
+    // v6: Tight compression + Angle-Pinned Topological Nucleation (19 = pinned_pair_tilt, 20 = band_pca_wave!)
+    let move_kinds: [usize; 16] = [8, 9, 16, 17, 18, 19, 20, 1, 6, 2, 15, 4, 11, 3, 13, 14];
+    let move_wts_tight: [f64; 16] = [4.40, 3.85, 3.00, 1.85, 2.25, 2.65, 2.40, 2.85, 2.20, 1.95, 1.25, 0.85, 0.82, 0.75, 0.65, 0.55];
+    let move_wts_breath: [f64; 16] = [3.80, 3.20, 5.10, 3.80, 4.10, 4.45, 3.30, 1.10, 2.00, 0.90, 2.65, 1.35, 1.10, 0.75, 1.80, 1.60];
+    let mut move_cdf_tight = Vec::with_capacity(16);
+    let mut move_cdf_breath = Vec::with_capacity(16);
     let mut acc_t = 0.0;
     let mut acc_b = 0.0;
-    for k in 0..14 {
+    for k in 0..16 {
         acc_t += move_wts_tight[k];
         acc_b += move_wts_breath[k];
         move_cdf_tight.push(acc_t);
@@ -2046,7 +2236,7 @@ fn main() {
             .map(|d| (d.pop[0].clone(), d.l, d.e0))
             .collect();
 
-        let mut all_children: Vec<(Vec<f64>, f64, Option<f64>, usize, f64)> =
+        let mut all_children: Vec<(Vec<f64>, f64, Option<f64>, usize, Vec<u16>, f64)> =
             Vec::with_capacity(n_islands * off_sz);
         for ii in 0..n_islands {
             let l = isl[ii].l;
@@ -2071,6 +2261,7 @@ fn main() {
                 let p_idx = rng.idx(isl[ii].pop.len());
                 let mut child = isl[ii].pop[p_idx].clone();
                 let x0 = child.clone();
+                let mut pins: Vec<u16> = Vec::new();
                 if c_i < nx {
                     let use_own = rng.f() < 0.65 || n_islands <= 1;
                     if use_own {
@@ -2089,25 +2280,26 @@ fn main() {
                     }
                 } else {
                     let mk = move_kinds[rng.choice_weighted(mcdf)];
-                    mutate_one(&mut child, l, mk, res_cdf.as_deref(), &mut rng);
-                    if in_warmup && rng.f() < 0.35 {
-                        // Two-move topological combo inside breathing warmup (e.g. arm_extend + row_slide)
+                    pins = mutate_one(&mut child, l, mk, res_cdf.as_deref(), &mut rng);
+                    if in_warmup && pins.is_empty() && rng.f() < 0.35 {
+                        // Two-move topological combo inside breathing warmup when unpinned
                         let mk2 = move_kinds[rng.choice_weighted(mcdf)];
-                        mutate_one(&mut child, l, mk2, None, &mut rng);
+                        pins = mutate_one(&mut child, l, mk2, None, &mut rng);
                     }
                 }
                 if sym >= 2 {
                     mirror_symmetrize(&mut child, &x0, n, sym - 2);
+                    pins.clear();
                 }
                 for sq_i in 0..n {
                     child[3 * sq_i] = child[3 * sq_i].clamp(0.5, l - 0.5);
                     child[3 * sq_i + 1] = child[3 * sq_i + 1].clamp(0.5, l - 0.5);
                 }
-                all_children.push((child, l, ecut, sym, f64::INFINITY));
+                all_children.push((child, l, ecut, sym, pins, f64::INFINITY));
             }
         }
 
-        relax_batch_parallel(&mut all_children, steps, 1e-26, nthreads);
+        relax_children_parallel(&mut all_children, steps, 1e-26, nthreads);
 
         for ii in 0..n_islands {
             let sl = &all_children[ii * off_sz..(ii + 1) * off_sz];
@@ -2116,7 +2308,7 @@ fn main() {
             let in_warmup = gen < isl[ii].hold_until;
             let mut xa = isl[ii].pop.clone();
             let mut ea = isl[ii].ene.clone();
-            for (ch_v, _, _, _, ch_e) in sl {
+            for (ch_v, _, _, _, _, ch_e) in sl {
                 if *ch_e <= 1e-22 {
                     let (s_ex, vn, mp) = exact_side_and_max_pen(ch_v);
                     if mp <= 1e-12 && s_ex < best_legal_s - 1e-10 {
