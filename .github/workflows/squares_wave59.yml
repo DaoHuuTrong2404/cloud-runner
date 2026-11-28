@@ -1,0 +1,150 @@
+name: "Squares Math Wave 59 FAITHFUL LCUT + COMPILED RUST PACKER HOP/HHOP ASSAULT (80c W59L + 80c W59P = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w59"
+        type: string
+      w57_run_id:
+        required: true
+        default: "46080507430"
+        type: string
+      w58_run_id:
+        required: true
+        default: "46082142153"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w59_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W57/W58 megapool + pub_v15 (<60s ultra-fast R35 bundle!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w57_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w57-megapool-bundle" -D .
+          tar -xf megapool_w57.tar
+          rm -f megapool_w57.tar
+          mkdir -p pool/wins/pub_seeds pool/wins/w57l pool/wins/w57t pool/wins/w58p
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w57_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w57-w57l-*" -D pool/wins/w57l || true
+          gh run download "${{ inputs.w57_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w57-w57t-*" -D pool/wins/w57t || true
+          gh run download "${{ inputs.w58_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w58-w58p-*" -D pool/wins/w58p || true
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w59.tar pool/wins
+          ls -lh megapool_w59.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w59.tar
+          retention-days: 7
+
+  wave59l_faithful_lcut:
+    needs: consolidate_w59_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 37
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 59L 80-Core Faithful Reference `lcut` + Compiled Rust `packer hhop`/`hop`!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w59.tar
+          mkdir -p "artifacts/w59l_${SHARD_ID}" /tmp/sq_w59_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin packer)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/packer" /tmp/sq_bins/packer
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w59_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w59_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w59_ds/
+          export SQ_DS_DIR="/tmp/sq_w59_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export PACKER_BIN="/tmp/sq_bins/packer"
+          timeout -s KILL 1900s python3 -u squares_math/workers/w59l_faithful_lcut_and_rust_hop.py \
+            --union-npz /tmp/sq_w59_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w59_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 1780 \
+            --seed-off 850000 \
+            --out-npz "artifacts/w59l_${SHARD_ID}/w59l_lcut_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w59l_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w59l-${{ matrix.shard }}
+          path: artifacts/w59l_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave59p_rust_packer:
+    needs: consolidate_w59_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 37
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 59P 80-Core Compiled Rust `packer hop` + `hhop` + `bandflip` All-Shell Assault!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w59.tar
+          mkdir -p "artifacts/w59p_${SHARD_ID}" /tmp/sq_w59_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin packer)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/packer" /tmp/sq_bins/packer
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w59_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w59_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w59_ds/
+          export SQ_DS_DIR="/tmp/sq_w59_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export PACKER_BIN="/tmp/sq_bins/packer"
+          timeout -s KILL 1900s python3 -u squares_math/workers/w59p_rust_packer_hop_assault.py \
+            --union-npz /tmp/sq_w59_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w59_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 1780 \
+            --seed-off 910000 \
+            --out-npz "artifacts/w59p_${SHARD_ID}/w59p_pk_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w59p_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w59p-${{ matrix.shard }}
+          path: artifacts/w59p_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
