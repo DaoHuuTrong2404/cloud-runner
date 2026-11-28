@@ -1220,8 +1220,8 @@ fn mutate_one(
                 }
             }
         }
-        16 | _ => {
-            // Multi-step arm_extend (1..3 upright squares appended onto a tilted row tip!)
+        16 => {
+            // Multi-step arm_extend (1..4 upright squares appended onto a tilted row tip + neighbor nudge!)
             let tilted: Vec<usize> = (0..n)
                 .filter(|&i| angle_dist_90(v[3 * i + 2], 0.0) > 0.01)
                 .collect();
@@ -1242,7 +1242,8 @@ fn mutate_one(
                     }
                 }
                 if end_along > -1e8 {
-                    let n_ext = if rng.f() < 0.55 { 1 } else { rng.int_range(2, 4) };
+                    let n_ext = if rng.f() < 0.45 { 1 } else { rng.int_range(2, 5) };
+                    let mut converted = Vec::with_capacity(n_ext);
                     for step_k in 1..=n_ext {
                         let tx = x0 + (end_along + step_k as f64) * ux;
                         let ty = y0 + (end_along + step_k as f64) * uy;
@@ -1252,7 +1253,7 @@ fn mutate_one(
                         let mut best_j = usize::MAX;
                         let mut best_d2 = 2.25f64;
                         for j in 0..n {
-                            if angle_dist_90(v[3 * j + 2], 0.0) <= 0.01 {
+                            if angle_dist_90(v[3 * j + 2], 0.0) <= 0.01 && !converted.contains(&j) {
                                 let d2 =
                                     (v[3 * j] - tx).powi(2) + (v[3 * j + 1] - ty).powi(2);
                                 if d2 < best_d2 {
@@ -1265,10 +1266,90 @@ fn mutate_one(
                             v[3 * best_j] = tx;
                             v[3 * best_j + 1] = ty;
                             v[3 * best_j + 2] = a0;
+                            converted.push(best_j);
                         } else {
                             break;
                         }
                     }
+                    // Gently nudge nearby upright neighbors outward so L-BFGS clears corner saddles cleanly
+                    for &cj in &converted {
+                        let (cx, cy) = (v[3 * cj], v[3 * cj + 1]);
+                        for k in 0..n {
+                            if k != cj && angle_dist_90(v[3 * k + 2], 0.0) <= 0.01 && !converted.contains(&k) {
+                                let dx = v[3 * k] - cx;
+                                let dy = v[3 * k + 1] - cy;
+                                let d2 = dx * dx + dy * dy;
+                                if d2 > 1e-6 && d2 < 1.38 {
+                                    let inv = 0.085 / d2.sqrt();
+                                    v[3 * k] += dx * inv;
+                                    v[3 * k + 1] += dy * inv;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        17 | _ => {
+            // parallel_arm_spawn: nucleate a parallel tilted row (2..5 squares) adjacent to an existing tilted row!
+            let tilted: Vec<usize> = (0..n)
+                .filter(|&i| angle_dist_90(v[3 * i + 2], 0.0) > 0.01)
+                .collect();
+            if !tilted.is_empty() {
+                let i0 = tilted[rng.idx(tilted.len())];
+                let (x0, y0, a0) = (v[3 * i0], v[3 * i0 + 1], v[3 * i0 + 2]);
+                let dr = a0 + (rng.idx(2) as f64) * FRAC_PI_2;
+                let (uy, ux) = dr.sin_cos();
+                let side_sgn = if rng.f() < 0.5 { 1.0 } else { -1.0 };
+                let (nx_p, ny_p) = (-side_sgn * uy, side_sgn * ux);
+                let bx = x0 + nx_p;
+                let by = y0 + ny_p;
+                let len_row = rng.int_range(2, 6);
+                let mut used = Vec::with_capacity(len_row);
+                let start_off = -0.5 * ((len_row - 1) as f64);
+                for sk in 0..len_row {
+                    let s_along = start_off + (sk as f64);
+                    let tx = bx + s_along * ux;
+                    let ty = by + s_along * uy;
+                    if tx < 0.45 || tx > l - 0.45 || ty < 0.45 || ty > l - 0.45 {
+                        continue;
+                    }
+                    let mut best_j = usize::MAX;
+                    let mut best_d2 = 1.96f64;
+                    for j in 0..n {
+                        if angle_dist_90(v[3 * j + 2], 0.0) <= 0.01 && !used.contains(&j) {
+                            let d2 = (v[3 * j] - tx).powi(2) + (v[3 * j + 1] - ty).powi(2);
+                            if d2 < best_d2 {
+                                best_d2 = d2;
+                                best_j = j;
+                            }
+                        }
+                    }
+                    if best_j != usize::MAX {
+                        v[3 * best_j] = tx;
+                        v[3 * best_j + 1] = ty;
+                        v[3 * best_j + 2] = a0;
+                        used.push(best_j);
+                    }
+                }
+            } else {
+                // Pure grid fallback: tilt a small collinear strip of 3..5 squares at strip-law angle
+                let i0 = rng.idx(n);
+                let (x0, y0) = (v[3 * i0], v[3 * i0 + 1]);
+                let a_new = (1.0f64 / (rng.int_range(3, 8) as f64)).atan();
+                let (uy, ux) = a_new.sin_cos();
+                let mut d2: Vec<(usize, f64)> = (0..n)
+                    .map(|i| {
+                        let (rx, ry) = (v[3 * i] - x0, v[3 * i + 1] - y0);
+                        let perp = (-rx * uy + ry * ux).abs();
+                        let along = (rx * ux + ry * uy).abs();
+                        (i, perp * 4.0 + along)
+                    })
+                    .collect();
+                let m = rng.int_range(3, 6).min(n);
+                d2.select_nth_unstable_by(m - 1, |a, b| a.1.partial_cmp(&b.1).unwrap());
+                for &(i, _) in &d2[..m] {
+                    v[3 * i + 2] = a_new;
                 }
             }
         }
@@ -1387,6 +1468,36 @@ struct Island {
     sym: usize, // 0 = free, 2 + r = diagonal mirror with r diagonal squares
     released: bool,
     shr: usize,
+    hold_until: usize,
+    role: u8,
+}
+
+fn exact_bbox_side(v: &[f64]) -> f64 {
+    let n = v.len() / 3;
+    let (mut xmin, mut xmax, mut ymin, mut ymax) = (
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    );
+    for i in 0..n {
+        let (st, ct) = v[3 * i + 2].sin_cos();
+        let h = H * (ct.abs() + st.abs());
+        xmin = xmin.min(v[3 * i] - h);
+        xmax = xmax.max(v[3 * i] + h);
+        ymin = ymin.min(v[3 * i + 1] - h);
+        ymax = ymax.max(v[3 * i + 1] + h);
+    }
+    (xmax - xmin).max(ymax - ymin)
+}
+
+fn tilted_sum(v: &[f64]) -> f64 {
+    let n = v.len() / 3;
+    let mut s = 0.0;
+    for i in 0..n {
+        s += ((v[3 * i + 2] + FRAC_PI_4).rem_euclid(FRAC_PI_2) - FRAC_PI_4).abs();
+    }
+    s
 }
 
 // Tuple: (coords, box_l, ecut_opt, sym_code, out_energy)
@@ -1542,10 +1653,28 @@ fn gls_legalize_batch(
     });
 }
 
+fn role_for_island(idx: usize, n_islands: usize) -> u8 {
+    if n_islands <= 1 {
+        return 0;
+    }
+    if n_islands == 2 {
+        return if idx == 0 { 0 } else { 1 };
+    }
+    match idx % 6 {
+        0 => 0, // Tight compression
+        1 => 1, // Medium breathing arm-growth (+0.0042, 28-gen hold)
+        2 => 2, // Wide breathing / window-melt arm-growth (+0.0095, 32-gen hold)
+        3 => 0, // Alt-seed tight compression
+        4 => 3, // Breathing diagonal mirror (+0.0036, 20-gen hold)
+        _ => 4, // Tight diagonal mirror
+    }
+}
+
 fn init_island(
     seeds: &[(f64, Vec<f64>)],
     seed_idx: usize,
-    sym_flag: bool,
+    role: u8,
+    best_legal_s: f64,
     use_tess: bool,
     pop_sz: usize,
     gen: usize,
@@ -1554,10 +1683,11 @@ fn init_island(
     nthreads: usize,
     rng: &mut Rng,
 ) -> Island {
+    let sym_flag = role == 3 || role == 4;
     let (s_best0, ref p_best0) = seeds[0];
     let n = p_best0.len() / 3;
     if use_tess && !sym_flag {
-        let mut lt = s_best0 + 0.018;
+        let mut lt = best_legal_s.min(s_best0) + 0.015;
         let base_t = tess_or_window_start(n, lt, p_best0, rng);
         let mut batch: Vec<(Vec<f64>, f64, Option<f64>, usize, f64)> = (0..pop_sz)
             .map(|m| {
@@ -1572,7 +1702,7 @@ fn init_island(
             .collect();
         relax_batch_parallel(&mut batch, steps, 1e-26, nthreads);
         batch.sort_by(|a, b| a.4.partial_cmp(&b.4).unwrap_or(std::cmp::Ordering::Equal));
-        while batch[0].4 > thr && lt < s_best0 + 0.048 {
+        while batch[0].4 > thr && lt < best_legal_s + 0.044 {
             let l_next = lt + 0.006;
             for it in batch.iter_mut() {
                 it.0 = rescale_vec(&it.0, lt, l_next);
@@ -1596,11 +1726,27 @@ fn init_island(
                 sym: 0,
                 released: false,
                 shr: 0,
+                hold_until: gen + 24,
+                role,
             };
         }
     }
 
-    let (l0, ref p0) = seeds[seed_idx % seeds.len()];
+    let (s_seed, ref p0) = seeds[seed_idx % seeds.len()];
+    let (l0, hold_gens, init_noise) = match role {
+        1 => (best_legal_s + 0.0042, 28usize, 0.0040),
+        2 => (best_legal_s + 0.0095, 32usize, 0.0060),
+        3 => (best_legal_s + 0.0036, 20usize, 0.0035),
+        4 => (s_seed.min(best_legal_s + 0.0010), 0usize, 0.0025),
+        _ => {
+            let tight_l = if seed_idx == 0 {
+                best_legal_s - 5.0e-5
+            } else {
+                s_seed.min(best_legal_s + 0.0015)
+            };
+            (tight_l, 0usize, 0.0025)
+        }
+    };
     let (base, sym_code) = if sym_flag && n >= 4 {
         let (b, r) = mirror_seed(p0, l0, rng);
         (b, 2 + r)
@@ -1613,10 +1759,14 @@ fn init_island(
         let mut x = base.clone();
         if m > 0 {
             for k in 0..3 * n {
-                x[k] += 0.0025 * rng.gauss();
+                x[k] += init_noise * rng.gauss();
             }
             if sym_code >= 2 {
                 mirror_symmetrize(&mut x, &base, n, sym_code - 2);
+            }
+            for sq_i in 0..n {
+                x[3 * sq_i] = x[3 * sq_i].clamp(0.5, l0 - 0.5);
+                x[3 * sq_i + 1] = x[3 * sq_i + 1].clamp(0.5, l0 - 0.5);
             }
         }
         batch.push((x, l0, None, sym_code, f64::INFINITY));
@@ -1637,6 +1787,8 @@ fn init_island(
         sym: sym_code,
         released: false,
         shr: 0,
+        hold_until: gen + hold_gens,
+        role,
     }
 }
 
@@ -1647,10 +1799,34 @@ fn select_diverse(
     pop_sz: usize,
     elite: usize,
     div_thr: f32,
+    warmup: bool,
+    seed_tilt: f64,
 ) -> (Vec<Vec<f64>>, Vec<f64>) {
     let tot = xa.len();
+    let sort_keys: Vec<(u8, f64)> = (0..tot)
+        .map(|i| {
+            let e = ea[i];
+            if e <= 1e-18 {
+                let sb = exact_bbox_side(&xa[i]);
+                if warmup {
+                    let nov = (tilted_sum(&xa[i]) - seed_tilt).abs().min(8.0);
+                    (0u8, sb - 0.00045 * nov)
+                } else {
+                    (0u8, sb)
+                }
+            } else {
+                (1u8, e)
+            }
+        })
+        .collect();
+    let cmp_idx = |a: usize, b: usize| -> std::cmp::Ordering {
+        sort_keys[a]
+            .0
+            .cmp(&sort_keys[b].0)
+            .then_with(|| sort_keys[a].1.partial_cmp(&sort_keys[b].1).unwrap_or(std::cmp::Ordering::Equal))
+    };
     let mut order: Vec<usize> = (0..tot).collect();
-    order.sort_by(|&a, &b| ea[a].partial_cmp(&ea[b]).unwrap_or(std::cmp::Ordering::Equal));
+    order.sort_by(|&a, &b| cmp_idx(a, b));
     let descs: Vec<[f32; 128]> = xa.iter().map(|v| descriptor(v, l)).collect();
 
     let el = elite.min(pop_sz).min(tot);
@@ -1661,11 +1837,12 @@ fn select_diverse(
             mind[j] = mind[j].min(desc_l1(&descs[j], &descs[k]));
         }
     }
+    let eff_div = if warmup { div_thr * 0.72 } else { div_thr };
     for &j in &order[el..] {
         if keep.len() >= pop_sz {
             break;
         }
-        if mind[j] >= div_thr {
+        if mind[j] >= eff_div {
             keep.push(j);
             for m in 0..tot {
                 mind[m] = mind[m].min(desc_l1(&descs[m], &descs[j]));
@@ -1682,7 +1859,7 @@ fn select_diverse(
             }
         }
     }
-    keep.sort_by(|&a, &b| ea[a].partial_cmp(&ea[b]).unwrap_or(std::cmp::Ordering::Equal));
+    keep.sort_by(|&a, &b| cmp_idx(a, b));
     let out_x = keep.iter().map(|&i| xa[i].clone()).collect();
     let out_e = keep.iter().map(|&i| ea[i]).collect();
     (out_x, out_e)
@@ -1694,9 +1871,9 @@ fn main() {
     let out: String = arg(&a, "--out", String::from("santa_out.txt"));
     let seed: u64 = arg(&a, "--seed", 1);
     let sec_budget: f64 = arg(&a, "--sec", 600.0);
-    let n_islands: usize = arg(&a, "--islands", 4);
-    let pop_sz: usize = arg(&a, "--pop", 16);
-    let off_sz: usize = arg(&a, "--offspring", 36);
+    let n_islands: usize = arg(&a, "--islands", 6);
+    let pop_sz: usize = arg(&a, "--pop", 14);
+    let off_sz: usize = arg(&a, "--offspring", 28);
     let elite: usize = arg(&a, "--elite", 5);
     let steps: usize = arg(&a, "--steps", 125);
     let soft: f64 = arg(&a, "--soft", 1e-8);
@@ -1710,6 +1887,7 @@ fn main() {
     let (n, _s_hdr, v_best) = read_cfg(&inp);
     let (mut best_legal_s, v_norm, _) = exact_side_and_max_pen(&v_best);
     let s_start = best_legal_s;
+    let seed_tilt0 = tilted_sum(&v_norm);
 
     let mut seeds: Vec<(f64, Vec<f64>)> = vec![(best_legal_s, v_norm)];
     for nf in &nbr_files {
@@ -1747,25 +1925,31 @@ fn main() {
         }
     }
 
-    // Empirical RTX-5090 move weights with boosted multi-step arm_extend (16)
-    let move_kinds: [usize; 12] = [8, 9, 16, 1, 6, 2, 15, 4, 11, 3, 13, 14];
-    let move_wts: [f64; 12] = [4.56, 3.98, 3.40, 3.07, 2.33, 2.08, 1.10, 0.87, 0.84, 0.78, 0.65, 0.50];
-    let mut move_cdf = Vec::with_capacity(12);
-    let mut acc_w = 0.0;
-    for &w in &move_wts {
-        acc_w += w;
-        move_cdf.push(acc_w);
+    // Tight compression move weights + Breathing arm-growth warmup move weights (boosts 16=arm_extend, 17=parallel_arm_spawn, 15=cluster_tilt)
+    let move_kinds: [usize; 13] = [8, 9, 16, 17, 1, 6, 2, 15, 4, 11, 3, 13, 14];
+    let move_wts_tight: [f64; 13] = [4.56, 3.98, 3.15, 1.80, 3.07, 2.33, 2.08, 1.25, 0.87, 0.84, 0.78, 0.65, 0.55];
+    let move_wts_breath: [f64; 13] = [4.10, 3.40, 5.40, 3.90, 1.20, 2.15, 1.00, 2.75, 1.40, 1.15, 0.80, 1.85, 1.65];
+    let mut move_cdf_tight = Vec::with_capacity(13);
+    let mut move_cdf_breath = Vec::with_capacity(13);
+    let mut acc_t = 0.0;
+    let mut acc_b = 0.0;
+    for k in 0..13 {
+        acc_t += move_wts_tight[k];
+        acc_b += move_wts_breath[k];
+        move_cdf_tight.push(acc_t);
+        move_cdf_breath.push(acc_b);
     }
 
     let thr = soft * (n as f64);
-    let n_sym = (n_islands / 3).max(1).min(n_islands.saturating_sub(1));
     let mut isl: Vec<Island> = (0..n_islands)
         .map(|i| {
-            let is_sym = i >= n_islands - n_sym;
+            let role = role_for_island(i, n_islands);
+            let sidx = if i == 0 { 0 } else { i % seeds.len() };
             init_island(
                 &seeds,
-                i,
-                is_sym,
+                sidx,
+                role,
+                best_legal_s,
                 false,
                 pop_sz,
                 0,
@@ -1780,6 +1964,7 @@ fn main() {
     let mut gen = 0usize;
     let mut wins = 0usize;
     let mut resets = 0usize;
+    let mut rep_swaps = 0usize;
     let mut best_champ_score = f64::INFINITY;
 
     while t0.elapsed().as_secs_f64() < sec_budget {
@@ -1803,9 +1988,10 @@ fn main() {
         for ii in 0..n_islands {
             let l = isl[ii].l;
             let sym = isl[ii].sym;
+            let in_warmup = gen < isl[ii].hold_until;
             let res_cdf = residual_cdf(&isl[ii].pop[0], l);
             let wk = isl[ii].ene.last().copied().unwrap_or(f64::INFINITY);
-            let ecut = if wk.is_finite() && wk > 0.0 {
+            let ecut = if !in_warmup && wk.is_finite() && wk > 0.0 {
                 Some(12.0 * wk)
             } else {
                 None
@@ -1813,23 +1999,24 @@ fn main() {
             let nx = if sym > 0 {
                 0
             } else {
-                ((0.08 * off_sz as f64).round() as usize).min(off_sz)
+                ((0.10 * off_sz as f64).round() as usize).min(off_sz)
             };
             let stalled = gen.saturating_sub(isl[ii].last_imp) > r_stall / 2;
+            let mcdf = if in_warmup { &move_cdf_breath } else { &move_cdf_tight };
 
             for c_i in 0..off_sz {
                 let p_idx = rng.idx(isl[ii].pop.len());
                 let mut child = isl[ii].pop[p_idx].clone();
                 let x0 = child.clone();
                 if c_i < nx {
-                    let use_own = rng.f() < 0.68 || n_islands <= 1;
+                    let use_own = rng.f() < 0.65 || n_islands <= 1;
                     if use_own {
                         let m_idx = rng.idx(isl[ii].pop.len());
                         crossover_one(&mut child, &isl[ii].pop[m_idx], l, &mut rng);
                     } else {
-                        let hop = if rng.f() < 0.5 { 1 } else { n_islands - 1 };
+                        let hop = 1 + rng.idx(n_islands - 1);
                         let mi = (ii + hop) % n_islands;
-                        if stalled || (champs[mi].1, champs[mi].2) >= (l, isl[ii].e0) {
+                        if stalled || in_warmup || (champs[mi].1, champs[mi].2) >= (l, isl[ii].e0) {
                             let mate_scaled = rescale_vec(&champs[mi].0, champs[mi].1, l);
                             crossover_one(&mut child, &mate_scaled, l, &mut rng);
                         } else {
@@ -1838,8 +2025,13 @@ fn main() {
                         }
                     }
                 } else {
-                    let mk = move_kinds[rng.choice_weighted(&move_cdf)];
+                    let mk = move_kinds[rng.choice_weighted(mcdf)];
                     mutate_one(&mut child, l, mk, res_cdf.as_deref(), &mut rng);
+                    if in_warmup && rng.f() < 0.35 {
+                        // Two-move topological combo inside breathing warmup (e.g. arm_extend + row_slide)
+                        let mk2 = move_kinds[rng.choice_weighted(mcdf)];
+                        mutate_one(&mut child, l, mk2, None, &mut rng);
+                    }
                 }
                 if sym >= 2 {
                     mirror_symmetrize(&mut child, &x0, n, sym - 2);
@@ -1858,10 +2050,11 @@ fn main() {
             let sl = &all_children[ii * off_sz..(ii + 1) * off_sz];
             let l = isl[ii].l;
             let sym = isl[ii].sym;
+            let in_warmup = gen < isl[ii].hold_until;
             let mut xa = isl[ii].pop.clone();
             let mut ea = isl[ii].ene.clone();
             for (ch_v, _, _, _, ch_e) in sl {
-                if *ch_e <= 1e-22 && l < best_legal_s - 1e-10 {
+                if *ch_e <= 1e-22 {
                     let (s_ex, vn, mp) = exact_side_and_max_pen(ch_v);
                     if mp <= 1e-12 && s_ex < best_legal_s - 1e-10 {
                         best_legal_s = s_ex;
@@ -1872,24 +2065,28 @@ fn main() {
                 xa.push(ch_v.clone());
                 ea.push(*ch_e);
             }
-            let (new_pop, new_ene) = select_diverse(xa, ea, l, pop_sz, elite, div_thr);
+            let (new_pop, new_ene) =
+                select_diverse(xa, ea, l, pop_sz, elite, div_thr, in_warmup, seed_tilt0);
             isl[ii].pop = new_pop;
             isl[ii].ene = new_ene;
             isl[ii].e0 = isl[ii].ene[0];
-            if isl[ii].e0 < 0.5 * isl[ii].e_ref {
+            if isl[ii].e0 < 0.5 * isl[ii].e_ref || in_warmup {
                 isl[ii].e_ref = isl[ii].e0;
                 isl[ii].last_imp = gen;
             }
-            let c_score = isl[ii].l + 15.0 * (isl[ii].e0 / (n as f64)).max(0.0).sqrt();
-            if c_score < best_champ_score - 1e-7 && isl[ii].e0 < 1e-3 * (n as f64) {
-                best_champ_score = c_score;
-                let (s_ch, v_ch, _) = exact_side_and_max_pen(&isl[ii].pop[0]);
-                write_cfg_atomic(&format!("{out}.champ"), s_ch.min(isl[ii].l), &v_ch);
+            if !in_warmup {
+                let c_score = isl[ii].l + 15.0 * (isl[ii].e0 / (n as f64)).max(0.0).sqrt();
+                if c_score < best_champ_score - 1e-7 && isl[ii].e0 < 1e-3 * (n as f64) {
+                    best_champ_score = c_score;
+                    let (s_ch, v_ch, _) = exact_side_and_max_pen(&isl[ii].pop[0]);
+                    write_cfg_atomic(&format!("{out}.champ"), s_ch.min(isl[ii].l), &v_ch);
+                }
             }
-            if isl[ii].e0 < thr {
+            if gen >= isl[ii].hold_until && isl[ii].e0 < thr {
                 let mut stp = shrink * if isl[ii].e0 < thr * 0.01 { 4.0 } else { 1.0 };
-                if l - best_legal_s > 0.01 {
-                    stp = stp.max(0.05 * (l - best_legal_s));
+                let excess = l - best_legal_s;
+                if excess > 0.0004 {
+                    stp = stp.max(0.14 * excess).max(2.2e-4);
                 }
                 let l_new = l - stp;
                 let mut re_batch: Vec<(Vec<f64>, f64, Option<f64>, usize, f64)> = isl[ii]
@@ -1906,6 +2103,65 @@ fn main() {
                 isl[ii].e_ref = isl[ii].e0;
                 isl[ii].last_imp = gen;
                 isl[ii].shr += 1;
+            }
+        }
+
+        // Pressure-Ladder Replica Exchange (Odriozola / Basurto downward injection every 10 gens!)
+        if gen % 10 == 9 && n_islands >= 2 {
+            let champ_descs: Vec<[f32; 128]> =
+                (0..n_islands).map(|i| descriptor(&isl[i].pop[0], isl[i].l)).collect();
+            let mut rep_targets: Vec<usize> = Vec::new();
+            let mut rep_batch: Vec<(Vec<f64>, f64, Option<f64>, usize, f64)> = Vec::new();
+            for hi in 0..n_islands {
+                if isl[hi].sym != 0 || isl[hi].e0 > thr * 2.5 {
+                    continue;
+                }
+                for lo in 0..n_islands {
+                    if hi == lo || isl[lo].sym != 0 {
+                        continue;
+                    }
+                    let dl = isl[hi].l - isl[lo].l;
+                    if dl > 4.0e-5 && dl <= 0.0075 {
+                        if desc_l1(&champ_descs[hi], &champ_descs[lo]) >= 0.30 {
+                            rep_targets.push(lo);
+                            rep_batch.push((
+                                rescale_vec(&isl[hi].pop[0], isl[hi].l, isl[lo].l),
+                                isl[lo].l,
+                                None,
+                                0,
+                                f64::INFINITY,
+                            ));
+                        }
+                    }
+                }
+            }
+            if !rep_batch.is_empty() {
+                relax_batch_parallel(&mut rep_batch, 240, 1e-26, nthreads);
+                for (k_rep, &lo) in rep_targets.iter().enumerate() {
+                    let (ref rv, rl, _, _, re) = rep_batch[k_rep];
+                    if re <= 1e-22 && rl < best_legal_s - 1e-10 {
+                        let (s_ex, vn, mp) = exact_side_and_max_pen(rv);
+                        if mp <= 1e-12 && s_ex < best_legal_s - 1e-10 {
+                            best_legal_s = s_ex;
+                            wins += 1;
+                            write_cfg_atomic(&out, best_legal_s, &vn);
+                        }
+                    }
+                    let med_e = isl[lo].ene[isl[lo].ene.len() / 2];
+                    if re < med_e {
+                        let mut xa = isl[lo].pop.clone();
+                        let mut ea = isl[lo].ene.clone();
+                        xa.push(rv.clone());
+                        ea.push(re);
+                        let in_w = gen < isl[lo].hold_until;
+                        let (npop, nene) =
+                            select_diverse(xa, ea, isl[lo].l, pop_sz, elite, div_thr, in_w, seed_tilt0);
+                        isl[lo].pop = npop;
+                        isl[lo].ene = nene;
+                        isl[lo].e0 = isl[lo].ene[0];
+                        rep_swaps += 1;
+                    }
+                }
             }
         }
 
@@ -1930,7 +2186,7 @@ fn main() {
         // Island resets, tess_start topology injection, & Released-Mirror transfer!
         let min_l = isl.iter().map(|d| d.l).fold(f64::INFINITY, f64::min);
         for ii in 0..n_islands {
-            if ii == best_isl {
+            if ii == best_isl || gen < isl[ii].hold_until {
                 continue;
             }
             let age = gen.saturating_sub(isl[ii].born);
@@ -1943,6 +2199,7 @@ fn main() {
                     let nxy = rng.uniform(0.002, 0.010);
                     let nth = rng.uniform(0.2, 1.0).to_radians();
                     let l_rel = isl[ii].l;
+                    let role_jj = isl[jj].role;
                     let mut rel_batch: Vec<(Vec<f64>, f64, Option<f64>, usize, f64)> = isl[ii]
                         .pop
                         .iter()
@@ -1970,23 +2227,27 @@ fn main() {
                         sym: 0,
                         released: false,
                         shr: 0,
+                        hold_until: gen,
+                        role: role_jj,
                     };
                     isl[ii].released = true;
                     isl[ii].last_imp = gen;
                     continue;
                 }
             }
-            let hopeless = age >= 160 && isl[ii].e0 > 1000.0 * thr;
-            let far_behind = age >= 100 && isl[ii].l - min_l > 0.0012;
+            let post_hold = gen.saturating_sub(isl[ii].hold_until);
+            let hopeless = post_hold >= 140 && isl[ii].e0 > 1000.0 * thr;
+            let far_behind = post_hold >= 85 && isl[ii].l - min_l > 0.0020;
             if hopeless || far_behind || stall > r_stall {
                 resets += 1;
-                let keep_sym = isl[ii].sym >= 2;
-                let use_tess = !keep_sym && rng.f() < 0.25;
+                let role = isl[ii].role;
+                let use_tess = (role == 2 && rng.f() < 0.45) || (role == 1 && rng.f() < 0.20);
                 let sidx = rng.idx(seeds.len());
                 isl[ii] = init_island(
                     &seeds,
                     sidx,
-                    keep_sym,
+                    role,
+                    best_legal_s,
                     use_tess,
                     pop_sz,
                     gen,
@@ -2018,11 +2279,12 @@ fn main() {
     }
 
     println!(
-        "{{\"n\": {}, \"gens\": {}, \"wins\": {}, \"resets\": {}, \"s_start\": {:.12}, \"s_best\": {:.12}, \"sec\": {:.2}}}",
+        "{{\"n\": {}, \"gens\": {}, \"wins\": {}, \"resets\": {}, \"swaps\": {}, \"s_start\": {:.12}, \"s_best\": {:.12}, \"sec\": {:.2}}}",
         n,
         gen,
         wins,
         resets,
+        rep_swaps,
         s_start,
         best_legal_s,
         t0.elapsed().as_secs_f64()
