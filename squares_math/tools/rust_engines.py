@@ -27,6 +27,10 @@ def get_anneal_bin():
     return os.environ.get("ANNEAL_BIN", "/tmp/sq_bins/anneal")
 
 
+def get_santa_ga_bin():
+    return os.environ.get("SANTA_GA_BIN", "/tmp/sq_bins/santa_ga")
+
+
 def side_exact(P):
     h = 0.5 * (np.abs(np.cos(P[:, 2])) + np.abs(np.sin(P[:, 2])))
     return float(
@@ -732,3 +736,81 @@ def run_anneal_sched_regional(
             pass
         Q_out = normalize_to_origin(Q_out)
         return side_exact(Q_out), Q_out, js
+
+
+def run_santa_ga(
+    P_in,
+    nbr_packings=None,
+    seed=1,
+    sec=520.0,
+    islands=6,
+    pop=28,
+    offspring=112,
+    steps=260,
+    threads=4,
+    timeout_s=555.0,
+):
+    """Run compiled Rust 1st-Place Santa 2025 Island Genetic Algorithm (`santa_ga`).
+    Uses `std::thread::scope` across `threads` OS threads (`arm_extend` + `mirror_seed` + `released_mirror`
+    + `row_slide` + `band_reangle` + `twist` + `crossover` + `OVERLAP_TARGETING=0.80`).
+    Returns `(Q_win_or_None, Q_champ_or_None, js_dict)`.
+    """
+    gbin = get_santa_ga_bin()
+    if not os.path.exists(gbin):
+        return None, None, {}
+    P = normalize_to_origin(P_in)
+    s0 = side_exact(P)
+    with tempfile.TemporaryDirectory(prefix="sga_") as tmp:
+        f_in = os.path.join(tmp, "in.txt")
+        f_out = os.path.join(tmp, "out.txt")
+        write_packer_cfg(f_in, s0, P)
+        cmd = [
+            gbin,
+            "--in",
+            f_in,
+            "--out",
+            f_out,
+            "--seed",
+            str(int(seed)),
+            "--sec",
+            repr(float(sec)),
+            "--islands",
+            str(int(islands)),
+            "--pop",
+            str(int(pop)),
+            "--offspring",
+            str(int(offspring)),
+            "--steps",
+            str(int(steps)),
+            "--threads",
+            str(int(threads)),
+        ]
+        for ni, Pn in enumerate(nbr_packings or []):
+            if Pn is not None and len(Pn) >= len(P):
+                fn = os.path.join(tmp, f"nbr_{ni}.txt")
+                write_packer_cfg(fn, side_exact(Pn), Pn)
+                cmd += ["--nbr", fn]
+        js = {}
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=float(timeout_s)
+            )
+            if r.stdout.strip():
+                js = json.loads(r.stdout.strip().splitlines()[-1])
+        except Exception:
+            pass
+
+        Q_win = None
+        if os.path.exists(f_out):
+            _, Qw = read_packer_cfg(f_out)
+            if Qw is not None and Qw.shape == P.shape and np.isfinite(Qw).all():
+                Q_win = normalize_to_origin(Qw)
+
+        Q_champ = None
+        f_ch = f_out + ".champ"
+        if os.path.exists(f_ch):
+            _, Qc = read_packer_cfg(f_ch)
+            if Qc is not None and Qc.shape == P.shape and np.isfinite(Qc).all():
+                Q_champ = normalize_to_origin(Qc)
+
+        return Q_win, Q_champ, js

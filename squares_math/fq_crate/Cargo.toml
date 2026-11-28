@@ -33,3 +33,7 @@ path = "src/anneal.rs"
 [[bin]]
 name = "harden"
 path = "src/harden.rs"
+
+[[bin]]
+name = "santa_ga"
+path = "src/santa_ga.rs"
