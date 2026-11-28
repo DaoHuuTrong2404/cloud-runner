@@ -1,0 +1,155 @@
+name: "Squares Math Wave 66 UNIFIED 8-SYM DP (TOP-6) + FORGE-2 + 8-ROUND HYDRAULIC-VISE/SCHED KILLSHOT (88c W66G + 72c W66V = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w66"
+        type: string
+      w65_run_id:
+        required: true
+        default: "46107074195"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w66_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W65 megapool + W65S/W65F wins (<60s!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w65_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w65-megapool-bundle" -D .
+          tar -xf megapool_w65.tar
+          rm -f megapool_w65.tar
+          mkdir -p pool/wins/pub_seeds pool/wins/w65s pool/wins/w65f
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w65_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w65-w65s-*" -D pool/wins/w65s || true
+          gh run download "${{ inputs.w65_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w65-w65f-*" -D pool/wins/w65f || true
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l) | Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          tar -cf megapool_w66.tar pool/wins pool/gadgets
+          ls -lh megapool_w66.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w66.tar
+          retention-days: 7
+
+  wave66g_unified_dp_forge2:
+    needs: consolidate_w66_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 37
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 66G 88-Core Unified 8-Sym DP (top_m=6) + Wave-2 Nakajima Gadget Forge!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w66.tar
+          mkdir -p "artifacts/w66g_${SHARD_ID}" /tmp/sq_w66_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin packer --bin anneal --bin harden)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/packer" /tmp/sq_bins/packer
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/harden" /tmp/sq_bins/harden
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w66_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w66_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w66_ds/
+          GAD_NPZ="$(find pool/gadgets -name '*.npz' | head -n 1)"
+          export SQ_DS_DIR="/tmp/sq_w66_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export PACKER_BIN="/tmp/sq_bins/packer"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          timeout -s KILL 1920s python3 -u squares_math/workers/w66g_unified_dp_and_fresh_gadget_forge.py \
+            --union-npz /tmp/sq_w66_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --global-gadgets-npz "${GAD_NPZ:-/nonexistent.npz}" \
+            --frontier-json /tmp/sq_w66_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 22 --procs 4 --budget-sec 1780 \
+            --seed-off 2080000 \
+            --out-npz "artifacts/w66g_${SHARD_ID}/w66g_unidp_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w66g_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w66g-${{ matrix.shard }}
+          path: artifacts/w66g_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave66v_dedicated_vise_8round:
+    needs: consolidate_w66_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 37
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 66V 72-Core Dedicated 2-Puzzle/Shard Hydraulic-Vise + Sched NPT 8-Round Killshot!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w66.tar
+          mkdir -p "artifacts/w66v_${SHARD_ID}" /tmp/sq_w66_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin packer --bin anneal --bin harden)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/packer" /tmp/sq_bins/packer
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/harden" /tmp/sq_bins/harden
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w66_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w66_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w66_ds/
+          export SQ_DS_DIR="/tmp/sq_w66_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export PACKER_BIN="/tmp/sq_bins/packer"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          timeout -s KILL 1920s python3 -u squares_math/workers/w66v_dedicated_vise_sched_8round_killshot.py \
+            --union-npz /tmp/sq_w66_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w66_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 18 --procs 4 --budget-sec 1780 \
+            --seed-off 2180000 \
+            --out-npz "artifacts/w66v_${SHARD_ID}/w66v_vise8r_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w66v_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w66v-${{ matrix.shard }}
+          path: artifacts/w66v_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
