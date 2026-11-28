@@ -143,7 +143,7 @@ impl Sys {
 
     fn rebuild(&mut self, v: &[f64]) {
         let n = self.n;
-        let cut = SQRT2 + self.skin;
+        let cut = SQRT_2 + self.skin;
         let cut2 = cut * cut;
         let lo = -1.0;
         let span = (self.s + 2.0).max(2.0);
@@ -1174,8 +1174,9 @@ fn main() {
                     for _ in 0..3 {
                         let mut idx: Vec<usize> = (0..m).collect();
                         for d_i in 0..drop {
-                            let rm = rng.idx(idx.len() - d_i);
-                            idx.swap(rm, idx.len() - 1 - d_i);
+                            let last_pos = m - 1 - d_i;
+                            let rm = rng.idx(last_pos + 1);
+                            idx.swap(rm, last_pos);
                         }
                         idx.truncate(n);
                         idx.sort_unstable();
