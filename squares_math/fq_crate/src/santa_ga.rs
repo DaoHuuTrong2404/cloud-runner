@@ -1433,6 +1433,36 @@ fn relax_batch_parallel(
     });
 }
 
+fn build_fine_legalize_batch(isl: &[Island], best_legal_s: f64) -> Vec<(Vec<f64>, f64, f64)> {
+    let rel_rungs = [0.0, 2e-5, 7e-5, 1.8e-4, 4e-4, 9e-4, 2.2e-3];
+    let sub_best = [4.5e-4, 2.2e-4, 9e-5, 3e-5, 8e-6, 2e-6];
+    let mut leg_batch: Vec<(Vec<f64>, f64, f64)> = Vec::new();
+    for d in isl {
+        let mut cands: Vec<f64> = Vec::with_capacity(14);
+        for &dl in &rel_rungs {
+            let lk = d.l + dl;
+            if lk < best_legal_s - 1e-9 {
+                cands.push(lk);
+            }
+        }
+        for &db in &sub_best {
+            let lk = best_legal_s - db;
+            if lk >= d.l - 1e-12 && lk < best_legal_s - 1e-9 {
+                cands.push(lk);
+            }
+        }
+        cands.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut prev = -1e9f64;
+        for lk in cands {
+            if lk - prev > 1.5e-6 {
+                leg_batch.push((rescale_vec(&d.pop[0], d.l, lk), lk, f64::INFINITY));
+                prev = lk;
+            }
+        }
+    }
+    leg_batch
+}
+
 fn gls_legalize_batch(
     batch: &mut [(Vec<f64>, f64, f64)],
     nthreads: usize,
@@ -1670,7 +1700,7 @@ fn main() {
     let elite: usize = arg(&a, "--elite", 5);
     let steps: usize = arg(&a, "--steps", 125);
     let soft: f64 = arg(&a, "--soft", 1e-8);
-    let shrink: f64 = arg(&a, "--shrink", 2e-4);
+    let shrink: f64 = arg(&a, "--shrink", 7.5e-5);
     let div_thr: f32 = arg(&a, "--div", 0.55);
     let nthreads: usize = arg(&a, "--threads", 4);
     let nbr_files = multi_args(&a, "--nbr");
@@ -1879,18 +1909,9 @@ fn main() {
             }
         }
 
-        // Periodic GLS-Weighted Legalization (`Relaxer2W`) every 15 generations!
-        if gen % 15 == 14 {
-            let rungs = [0.0, 1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3];
-            let mut leg_batch: Vec<(Vec<f64>, f64, f64)> = Vec::new();
-            for d in &isl {
-                for &dl in &rungs {
-                    let lk = d.l + dl;
-                    if lk < best_legal_s - 1e-10 {
-                        leg_batch.push((rescale_vec(&d.pop[0], d.l, lk), lk, f64::INFINITY));
-                    }
-                }
-            }
+        // Periodic Fine-Rung GLS-Weighted Legalization (`Relaxer2W`) every 12 generations!
+        if gen % 12 == 11 {
+            let mut leg_batch = build_fine_legalize_batch(&isl, best_legal_s);
             if !leg_batch.is_empty() {
                 gls_legalize_batch(&mut leg_batch, nthreads);
                 for (lv, _, le) in &leg_batch {
@@ -1978,6 +1999,22 @@ fn main() {
         }
 
         gen += 1;
+    }
+
+    // Final end-of-visit Fine-Rung GLS-Weighted Legalization on all island champions!
+    let mut final_leg = build_fine_legalize_batch(&isl, best_legal_s);
+    if !final_leg.is_empty() {
+        gls_legalize_batch(&mut final_leg, nthreads);
+        for (lv, _, le) in &final_leg {
+            if *le <= 1e-20 {
+                let (s_ex, vn, mp) = exact_side_and_max_pen(lv);
+                if mp <= 1e-12 && s_ex < best_legal_s - 1e-10 {
+                    best_legal_s = s_ex;
+                    wins += 1;
+                    write_cfg_atomic(&out, best_legal_s, &vn);
+                }
+            }
+        }
     }
 
     println!(
