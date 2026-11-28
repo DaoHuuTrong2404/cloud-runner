@@ -1,0 +1,164 @@
+name: "Squares Math Wave 75 UPWARD N-1->N RELAXER2W BASIN INVASION (Santa-GA v7!) + K^2+1 SUB-0.500 GOBEL 4-STAIRCASE FORGE (80c W75A + 80c W75B = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w75"
+        type: string
+      w74_run_id:
+        required: true
+        default: "46148935074"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w75_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Precompile all 5 Rust LTO binaries (santa_ga v7!) + consolidate W74 wins (n=748 -> 27.8219915!) + rebuild 225-gadget 8-Sym DP cache!
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin packer --bin anneal --bin harden --bin santa_ga)
+          mkdir -p pool/bins
+          cp -f squares_math/fq_crate/target/release/{fq,packer,anneal,harden,santa_ga} pool/bins/
+          chmod +x pool/bins/*
+          gh run download "${{ inputs.w74_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w74-megapool-bundle" -D .
+          tar -xf megapool_w74.tar
+          rm -f megapool_w74.tar pool/dp_cache.npz
+          mkdir -p pool/wins/pub_seeds pool/wins/w74a pool/wins/w74b
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w74_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w74-w74a-*" -D pool/wins/w74a || true
+          gh run download "${{ inputs.w74_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w74-w74b-*" -D pool/wins/w74b || true
+          python3 -u squares_math/tools/dp8_cache_w68.py \
+            --union-npz squares_math/seeds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --gad-glob "pool/gadgets/**/*.npz" \
+            --out-npz pool/dp_cache.npz
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l) | Gadget NPZs: $(find pool/gadgets -name '*.npz' | wc -l)"
+          ls -lh pool/dp_cache.npz
+          tar -cf megapool_w75.tar pool/bins pool/wins pool/gadgets pool/dp_cache.npz
+          ls -lh megapool_w75.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w75.tar
+          retention-days: 7
+
+  wave75a_upward_nm1_basin_invasion:
+    needs: consolidate_w75_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 37
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 75A 80-Core Upward cur[n-1]->n Relaxer2W Basin Invasion (Santa-GA v7)!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w75.tar
+          mkdir -p "artifacts/w75a_${SHARD_ID}" /tmp/sq_w75_ds /tmp/sq_bins
+          chmod +x pool/bins/*
+          ln -sf "$(pwd)/pool/bins/"* /tmp/sq_bins/
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w75_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w75_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w75_ds/
+          export SQ_DS_DIR="/tmp/sq_w75_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export PACKER_BIN="/tmp/sq_bins/packer"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          export SANTA_GA_BIN="/tmp/sq_bins/santa_ga"
+          timeout -s KILL 1960s python3 -u squares_math/workers/w75a_upward_nm1_basin_invasion_gav7.py \
+            --union-npz /tmp/sq_w75_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w75_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 1840 \
+            --seed-off 3950000 \
+            --out-npz "artifacts/w75a_${SHARD_ID}/w75a_nm1_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w75a_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w75a-${{ matrix.shard }}
+          path: artifacts/w75a_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave75b_k2p1_gobel_staircase_forge:
+    needs: consolidate_w75_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 37
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 75B 80-Core K^2+1 Sub-0.500 Sheared Gobel 4-Staircase Forge + Santa-GA v7!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w75.tar
+          mkdir -p "artifacts/w75b_${SHARD_ID}" /tmp/sq_w75_ds /tmp/sq_bins
+          chmod +x pool/bins/*
+          ln -sf "$(pwd)/pool/bins/"* /tmp/sq_bins/
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w75_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w75_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w75_ds/
+          export SQ_DS_DIR="/tmp/sq_w75_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export PACKER_BIN="/tmp/sq_bins/packer"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          export SANTA_GA_BIN="/tmp/sq_bins/santa_ga"
+          timeout -s KILL 1960s python3 -u squares_math/workers/w75b_k2p1_and_gobel_staircase_forge.py \
+            --union-npz /tmp/sq_w75_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w75_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 20 --procs 4 --budget-sec 1840 \
+            --seed-off 4050000 \
+            --out-npz "artifacts/w75b_${SHARD_ID}/w75b_k2p1_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w75b_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w75b-${{ matrix.shard }}
+          path: artifacts/w75b_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7

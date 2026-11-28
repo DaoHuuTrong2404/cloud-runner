@@ -2118,6 +2118,121 @@ fn select_diverse(
     (out_x, out_e)
 }
 
+fn synthesize_upward_insert_seeds(
+    vm: &[f64],
+    m: usize,
+    n: usize,
+    best_legal_s: f64,
+    nthreads: usize,
+    rng: &mut Rng,
+) -> Vec<(f64, Vec<f64>, f64)> {
+    let add = n - m;
+    let (sm, vmn, _) = exact_side_and_max_pen(vm);
+    let l_base = best_legal_s.max(sm) + 0.0028;
+    let p_base = rescale_vec(&vmn, sm, l_base);
+    let tilted: Vec<usize> = (0..m)
+        .filter(|&i| angle_dist_90(p_base[3 * i + 2], 0.0) > 0.02)
+        .collect();
+    let a_dom = if !tilted.is_empty() {
+        p_base[3 * tilted[rng.idx(tilted.len())] + 2].rem_euclid(FRAC_PI_2)
+    } else {
+        FRAC_PI_4
+    };
+    let ang_choices = [
+        0.0,
+        a_dom,
+        (a_dom + 0.5 * FRAC_PI_2).rem_euclid(FRAC_PI_2),
+        FRAC_PI_4,
+        0.0,
+        a_dom,
+    ];
+    let hi_c = (l_base - 0.55).max(0.60);
+    let mut raw_cands: Vec<Vec<f64>> = Vec::with_capacity(10);
+
+    // 6 Voronoi max-clearance pocket insertions
+    for ci in 0..6 {
+        let mut vk = p_base.clone();
+        for a_step in 0..add {
+            let cur_m = vk.len() / 3;
+            let mut best_pt = (0.5 * l_base, 0.5 * l_base);
+            let mut best_d2 = -1.0f64;
+            for _ in 0..96 {
+                let qx = rng.uniform(0.55, hi_c);
+                let qy = rng.uniform(0.55, hi_c);
+                let mut md2 = f64::INFINITY;
+                for j in 0..cur_m {
+                    let dx = vk[3 * j] - qx;
+                    let dy = vk[3 * j + 1] - qy;
+                    md2 = md2.min(dx * dx + dy * dy);
+                }
+                if md2 > best_d2 {
+                    best_d2 = md2;
+                    best_pt = (qx, qy);
+                }
+            }
+            let ang = ang_choices[(ci + a_step) % ang_choices.len()];
+            vk.extend_from_slice(&[best_pt.0, best_pt.1, ang]);
+        }
+        raw_cands.push(vk);
+    }
+
+    // 4 Tilted-seam / arm-tip insertions with gentle neighbor nudge
+    for ci in 0..4 {
+        let mut vk = p_base.clone();
+        for _ in 0..add {
+            let cur_m = vk.len() / 3;
+            let i0 = if !tilted.is_empty() {
+                tilted[rng.idx(tilted.len())]
+            } else {
+                rng.idx(cur_m)
+            };
+            let a0 = vk[3 * i0 + 2].rem_euclid(FRAC_PI_2);
+            let dr = a0 + ((ci % 4) as f64) * FRAC_PI_2;
+            let (uy, ux) = dr.sin_cos();
+            let qx = (vk[3 * i0] + ux).clamp(0.52, hi_c);
+            let qy = (vk[3 * i0 + 1] + uy).clamp(0.52, hi_c);
+            for j in 0..cur_m {
+                let dx = vk[3 * j] - qx;
+                let dy = vk[3 * j + 1] - qy;
+                let d2 = dx * dx + dy * dy;
+                if d2 > 1e-6 && d2 < 1.44 {
+                    let inv = 0.08 / d2.sqrt();
+                    vk[3 * j] = (vk[3 * j] + dx * inv).clamp(0.5, l_base - 0.5);
+                    vk[3 * j + 1] = (vk[3 * j + 1] + dy * inv).clamp(0.5, l_base - 0.5);
+                }
+            }
+            let ang_ins = if ci % 2 == 0 { a0 } else { 0.0 };
+            vk.extend_from_slice(&[qx, qy, ang_ins]);
+        }
+        raw_cands.push(vk);
+    }
+
+    let l_tight = (best_legal_s - 0.0012).max(sm + 1e-4);
+    let l_breath = best_legal_s.max(sm) + 0.0048;
+    let mut leg_batch: Vec<(Vec<f64>, f64, f64)> = Vec::with_capacity(raw_cands.len() * 2);
+    for rc in &raw_cands {
+        leg_batch.push((rescale_vec(rc, l_base, l_tight), l_tight, f64::INFINITY));
+        leg_batch.push((rescale_vec(rc, l_base, l_breath), l_breath, f64::INFINITY));
+    }
+    gls_legalize_batch(&mut leg_batch, nthreads);
+
+    let mut scored: Vec<(u8, f64, f64, Vec<f64>, f64)> = Vec::with_capacity(leg_batch.len());
+    for (lv, _, _) in leg_batch {
+        let (sk, vkn, mp) = exact_side_and_max_pen(&lv);
+        let tier = if mp <= 1e-12 { 0u8 } else if mp <= 2e-3 { 1u8 } else { 2u8 };
+        scored.push((tier, sk + 25.0 * mp, sk, vkn, mp));
+    }
+    scored.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    scored
+        .into_iter()
+        .take(5)
+        .map(|(_, _, sk, vkn, mp)| (sk, vkn, mp))
+        .collect()
+}
+
 fn main() {
     let a: Vec<String> = env::args().collect();
     let inp: String = arg(&a, "--in", String::new());
@@ -2141,6 +2256,7 @@ fn main() {
     let (mut best_legal_s, v_norm, _) = exact_side_and_max_pen(&v_best);
     let s_start = best_legal_s;
     let mut seed_tilt0 = tilted_sum(&v_norm);
+    let mut wins = 0usize;
 
     let mut seeds: Vec<(f64, Vec<f64>)> = vec![(best_legal_s, v_norm)];
     for nf in &nbr_files {
@@ -2173,6 +2289,24 @@ fn main() {
                         sk.max(best_legal_s) + 1e-5
                     };
                     seeds.push((s_eff, vkn));
+                } else if m < n && n - m <= 3 {
+                    let up_cands =
+                        synthesize_upward_insert_seeds(&vm, m, n, best_legal_s, nthreads, &mut rng);
+                    for (sk, vkn, mp_u) in up_cands.into_iter().take(4) {
+                        if mp_u <= 1e-12 && sk < best_legal_s - 1e-10 {
+                            best_legal_s = sk;
+                            wins += 1;
+                            seeds[0] = (best_legal_s, vkn.clone());
+                            seed_tilt0 = tilted_sum(&vkn);
+                            write_cfg_atomic(&out, best_legal_s, &vkn);
+                        }
+                        let s_eff = if mp_u <= 1e-9 {
+                            sk
+                        } else {
+                            sk.max(best_legal_s) + 0.0020
+                        };
+                        seeds.push((s_eff, vkn));
+                    }
                 }
             }
         }
@@ -2215,7 +2349,6 @@ fn main() {
         .collect();
 
     let mut gen = 0usize;
-    let mut wins = 0usize;
     let mut resets = 0usize;
     let mut rep_swaps = 0usize;
     let mut best_champ_score = f64::INFINITY;
