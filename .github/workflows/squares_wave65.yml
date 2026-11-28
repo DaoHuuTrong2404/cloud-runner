@@ -1,0 +1,157 @@
+name: "Squares Math Wave 65 SPARROW GLS + SCHED NPT + HYDRAULIC-VISE CHANNEL + LARGE STRIP FORGE (88c W65S + 72c W65F = 160 Free Cores!)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tag:
+        required: true
+        default: "w65"
+        type: string
+      w64_run_id:
+        required: true
+        default: "46104252723"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  consolidate_w65_megapool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Consolidate W64 megapool + W64G/W64M wins & gadgets (<60s!)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download "${{ inputs.w64_run_id }}" --repo DaoHuuTrong2404/cloud-runner -n "w64-megapool-bundle" -D .
+          tar -xf megapool_w64.tar
+          rm -f megapool_w64.tar
+          mkdir -p pool/wins/pub_seeds pool/wins/w64g pool/wins/w64m tmp_w64g
+          cp -f squares_math/seeds/pub_v*_public_wins.npz pool/wins/pub_seeds/ || true
+          gh run download "${{ inputs.w64_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w64-w64g-*" -D tmp_w64g || true
+          gh run download "${{ inputs.w64_run_id }}" --repo DaoHuuTrong2404/cloud-runner -p "w64-w64m-*" -D pool/wins/w64m || true
+          find tmp_w64g -name 'w64g_abin_*.npz' -exec cp -f {} pool/wins/w64g/ \; || true
+          rm -rf tmp_w64g
+          echo "Win NPZs: $(find pool/wins -name '*.npz' | wc -l)"
+          tar -cf megapool_w65.tar pool/wins pool/gadgets
+          ls -lh megapool_w65.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: megapool_w65.tar
+          retention-days: 7
+
+  wave65s_sparrow_gls_npt:
+    needs: consolidate_w65_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 37
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 65S 88-Core Sparrow GLS + Lag-Controlled Regional NPT Monte Carlo!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w65.tar
+          mkdir -p "artifacts/w65s_${SHARD_ID}" /tmp/sq_w65_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin packer --bin anneal --bin harden)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/packer" /tmp/sq_bins/packer
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/harden" /tmp/sq_bins/harden
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w65_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w65_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w65_ds/
+          export SQ_DS_DIR="/tmp/sq_w65_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export PACKER_BIN="/tmp/sq_bins/packer"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          timeout -s KILL 1920s python3 -u squares_math/workers/w65s_sparrow_gls_and_sched_npt.py \
+            --union-npz /tmp/sq_w65_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --frontier-json /tmp/sq_w65_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 22 --procs 4 --budget-sec 1780 \
+            --seed-off 1820000 \
+            --out-npz "artifacts/w65s_${SHARD_ID}/w65s_sparrow_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w65s_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w65s-${{ matrix.shard }}
+          path: artifacts/w65s_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  wave65f_vise_channel_strip:
+    needs: consolidate_w65_megapool
+    runs-on: ubuntu-latest
+    timeout-minutes: 37
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python3 -m pip install --upgrade pip
+          pip install numpy scipy numba highspy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.run_tag }}-megapool-bundle
+          path: .
+      - name: Run Wave 65F 72-Core Hydraulic-Vise Channel + Large-M Strip Gadget Forge!
+        env:
+          SHARD_ID: ${{ matrix.shard }}
+        run: |
+          tar -xf megapool_w65.tar
+          mkdir -p "artifacts/w65f_${SHARD_ID}" /tmp/sq_w65_ds /tmp/sq_bins
+          (cd squares_math/fq_crate && cargo build --release --bin fq --bin packer --bin anneal --bin harden)
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/fq" /tmp/sq_bins/fq
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/packer" /tmp/sq_bins/packer
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/anneal" /tmp/sq_bins/anneal
+          ln -sf "$(pwd)/squares_math/fq_crate/target/release/harden" /tmp/sq_bins/harden
+          ln -sf "$(pwd)/squares_math/seeds/pub_base_v5.npz" /tmp/sq_w65_ds/pub_base_v5.npz
+          ln -sf "$(pwd)/squares_math/seeds/frontier_targets_public.json" /tmp/sq_w65_ds/frontier_targets_public.json
+          ln -sf "$(pwd)/squares_math/tools/"*.py /tmp/sq_w65_ds/
+          GAD_NPZ="$(find pool/gadgets -name '*.npz' | head -n 1)"
+          export SQ_DS_DIR="/tmp/sq_w65_ds"
+          export FQ_BIN="/tmp/sq_bins/fq"
+          export PACKER_BIN="/tmp/sq_bins/packer"
+          export ANNEAL_BIN="/tmp/sq_bins/anneal"
+          export HARDEN_BIN="/tmp/sq_bins/harden"
+          timeout -s KILL 1920s python3 -u squares_math/workers/w65f_hydraulic_vise_channel_and_large_strip.py \
+            --union-npz /tmp/sq_w65_ds/pub_base_v5.npz \
+            --win-glob "pool/wins/**/*.npz" \
+            --global-gadgets-npz "${GAD_NPZ:-/nonexistent.npz}" \
+            --frontier-json /tmp/sq_w65_ds/frontier_targets_public.json \
+            --shard "$SHARD_ID" --num-shards 18 --procs 4 --budget-sec 1780 \
+            --seed-off 1920000 \
+            --out-npz "artifacts/w65f_${SHARD_ID}/w65f_vise_s${SHARD_ID}.npz" || true
+          ls -lh "artifacts/w65f_${SHARD_ID}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.run_tag }}-w65f-${{ matrix.shard }}
+          path: artifacts/w65f_${{ matrix.shard }}
+          if-no-files-found: warn
+          retention-days: 7

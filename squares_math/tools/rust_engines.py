@@ -23,6 +23,10 @@ def get_packer_bin():
     return os.environ.get("PACKER_BIN", "/tmp/sq_bins/packer")
 
 
+def get_anneal_bin():
+    return os.environ.get("ANNEAL_BIN", "/tmp/sq_bins/anneal")
+
+
 def side_exact(P):
     h = 0.5 * (np.abs(np.cos(P[:, 2])) + np.abs(np.sin(P[:, 2])))
     return float(
@@ -90,6 +94,8 @@ def run_harden_reharden(
     noise=0.0045,
     mu=0.02,
     sym_md=0,
+    sym_band=0.0,
+    hold_move=0,
     timeout_s=25.0,
 ):
     """Run Ostashev/Nakajima `harden reharden` in compiled Rust (~0.3-1.2s per call!).
@@ -134,6 +140,10 @@ def run_harden_reharden(
             repr(float(mu)),
             "--sym-md",
             str(int(sym_md)),
+            "--sym-band",
+            repr(float(sym_band)),
+            "--hold-move",
+            str(int(hold_move)),
         ]
         try:
             r = subprocess.run(
@@ -577,3 +587,148 @@ def run_packer_hhop(
         if rq is None:
             return None
         return float(rq[0]), rq[1]
+
+
+def run_anneal_gls(
+    P_in,
+    shrink=6e-4,
+    ms=4500.0,
+    seed=1,
+    ng=40,
+    nl=24,
+    ring=1,
+    relax=24,
+    strike_iters=8,
+    timeout_s=12.0,
+):
+    """Run Gardeyn & Wauters Sparrow-style Guided Local Search (`anneal gls` in `anneal.rs` lines 587-835).
+    Cuts along two random seams to target side `S = s0 * (1 - shrink)`, then alternates continuous penetration-gradient
+    relaxation (`--relax`) + global/local repositioning (`--ng/--nl`) + `--ring 1` neighbor slack + GLS pair-weight bumps.
+    Returns `(s_target, Q_out, is_feasible, raw_overlap)` or `None`.
+    """
+    abin = get_anneal_bin()
+    if not os.path.exists(abin):
+        return None
+    P = normalize_to_origin(P_in)
+    s0 = side_exact(P)
+    with tempfile.TemporaryDirectory(prefix="angls_") as tmp:
+        f_in = os.path.join(tmp, "in.txt")
+        f_out = os.path.join(tmp, "out.txt")
+        write_packer_cfg(f_in, s0, P)
+        cmd = [
+            abin,
+            "gls",
+            "--in",
+            f_in,
+            "--out",
+            f_out,
+            "--shrink",
+            repr(float(shrink)),
+            "--ms",
+            repr(float(ms)),
+            "--seed",
+            str(int(seed)),
+            "--ng",
+            str(int(ng)),
+            "--nl",
+            str(int(nl)),
+            "--ring",
+            str(int(ring)),
+            "--relax",
+            str(int(relax)),
+            "--strike-iters",
+            str(int(strike_iters)),
+        ]
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=float(timeout_s)
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        if r.returncode != 0 or not os.path.exists(f_out):
+            return None
+        s_out, Q_out = read_packer_cfg(f_out)
+        if Q_out is None or Q_out.shape != P.shape or not np.isfinite(Q_out).all():
+            return None
+        feas = False
+        ov = 1e9
+        try:
+            js = json.loads(r.stdout.strip().splitlines()[-1])
+            feas = bool(js.get("feasible", False))
+            ov = float(js.get("overlap", 1e9))
+        except Exception:
+            pass
+        return float(s_out), Q_out, feas, ov
+
+
+def run_anneal_sched_regional(
+    P_in,
+    cx,
+    cy,
+    rad=3.4,
+    r_peak=0.15,
+    sweeps=6500,
+    bp_curve="0:1400,0.5:3800,1:8500",
+    lag_tol=0.0015,
+    lag_grow=0.0006,
+    seed=1,
+    timeout_s=18.0,
+):
+    """Run schedule-driven rounded-square regional NPT Monte Carlo (`anneal sched` in `anneal.rs` lines 423-585).
+    Uses `--lag-tol` to eliminate end-of-schedule residual rounding blowup while melting a `(cx, cy, rad)` pocket.
+    Returns `(S_exact, Q_legal, js_dict)` or `None`.
+    """
+    abin = get_anneal_bin()
+    if not os.path.exists(abin):
+        return None
+    P = normalize_to_origin(P_in)
+    s0 = side_exact(P)
+    r_curve = f"0:0,0.22:{float(r_peak):.4f},0.55:{float(r_peak):.4f},0.88:0,1:0"
+    with tempfile.TemporaryDirectory(prefix="ansch_") as tmp:
+        f_in = os.path.join(tmp, "in.txt")
+        f_out = os.path.join(tmp, "out.txt")
+        write_packer_cfg(f_in, s0, P)
+        cmd = [
+            abin,
+            "sched",
+            "--in",
+            f_in,
+            "--out",
+            f_out,
+            "--sweeps",
+            str(int(sweeps)),
+            "--seed",
+            str(int(seed)),
+            "--bp",
+            str(bp_curve),
+            "--r",
+            r_curve,
+            "--cx",
+            repr(float(cx)),
+            "--cy",
+            repr(float(cy)),
+            "--rad",
+            repr(float(rad)),
+            "--lag-tol",
+            repr(float(lag_tol)),
+            "--lag-grow",
+            repr(float(lag_grow)),
+        ]
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=float(timeout_s)
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        if r.returncode != 0 or not os.path.exists(f_out):
+            return None
+        _, Q_out = read_packer_cfg(f_out)
+        if Q_out is None or Q_out.shape != P.shape or not np.isfinite(Q_out).all():
+            return None
+        js = {}
+        try:
+            js = json.loads(r.stdout.strip().splitlines()[-1])
+        except Exception:
+            pass
+        Q_out = normalize_to_origin(Q_out)
+        return side_exact(Q_out), Q_out, js
